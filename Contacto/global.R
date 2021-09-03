@@ -128,6 +128,7 @@ tab_analisis <- navbarMenu("Análisis de Contacto",
                                       column(3, infoBoxOutput("VB_VentaTipo", width = 12)),
                                       column(3, infoBoxOutput("VB_VentaProducto", width = 12))
                                     ),
+                                    br(),
                                     fluidRow(
                                       column(6, box(title = "Serie Histórica de Contacto", width = 12,
                                                     solidHeader=TRUE,
@@ -142,9 +143,12 @@ tab_analisis <- navbarMenu("Análisis de Contacto",
                                                     )
                                              )
                                     ),
-                                    dataTableOutput("test")
+                                    br(),
+                                    HTML('<center><img src="logo2.png" width="90" height="90"></center>')
                                     ),
                            tabPanel("Análisis General", icon = icon("users"),
-                                    "General")
+                                    "General",
+                                    br(),
+                                    HTML('<center><img src="logo2.png" width="90" height="90"></center>'))
                            )
 
