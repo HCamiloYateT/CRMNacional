@@ -14,6 +14,7 @@ tagList(
     collapsible = TRUE,
     login_tab
     ),
+  tags$style(".buttonagency .bttn-primary{background-color: #D7DBDD;}"),
   tags$footer(HTML("
                     <!-- Footer -->
                            <footer class='page-footer font-large indigo'>

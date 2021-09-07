@@ -10,7 +10,7 @@ function(input, output, session) {
         div(
           style = "padding: 10px; padding-top: 8px; padding-bottom: 0;",
           shinyauthr::logoutUI("logout", label = "Salir", icon =icon("sign-out-alt"), 
-                               style = "background-color: #eee !important; border: 0;
+                               style = "background-color: #CB4335 !important; border: 0;
                                font-weight: bold; margin:5px; padding: 10px;")
         )
       )
@@ -59,7 +59,7 @@ function(input, output, session) {
       }
   })
   
-  ### Validacion de CAmpos Obligatorios ----
+  ### Validacion de Campos Obligatorios ----
   
   observe({
     req(credentials()$user_auth)
@@ -85,7 +85,8 @@ function(input, output, session) {
       Cliente = input$Cliente,
       Tipo = input$Tipo,
       Calidad = input$Calidad,
-      Venta = input$Venta
+      Venta = input$Venta,
+      Commentario = input$caption
     )
     
   })
@@ -138,9 +139,42 @@ function(input, output, session) {
       filter(Cliente == input$ClienteConsulta)
   })
   
-  #### Cajas ----
+  ### Consulta General
+  bd_general <- reactive({
+    req(credentials()$user_auth)
+    bd_registros() %>% 
+      left_join(users, by= c("Usuario"="User")) %>% 
+      arrange(Cliente, desc(Timestamp)) %>% 
+      group_by(Cliente) %>% 
+      filter(row_number()==1) %>% 
+      ungroup() %>% 
+      mutate(Dias = as.numeric(Sys.Date() - as.Date(Timestamp)),
+             RangoDias = case_when(Dias <= 7 ~ "De 0 a 7 días",
+                                   Dias <= 15 ~ "De 8 a 15 días",
+                                   Dias <= 30 ~ "De 16 a 30 días",
+                                   Dias <= 90 ~ "De 31 a  90 días",
+                                   Dias > 90 ~ "Más de 90 días",
+             )
+      )
+  })
   
-  ##### Contacto ----
+  ### Consula Fechas ----
+  
+  bd_fecha <- eventReactive(input$Refresh, {
+    req(credentials()$user_auth)
+    loadData() %>% 
+      left_join(users, by= c("Usuario"="User")) %>% 
+      mutate(Fecha = as.Date(Timestamp)) %>% 
+      filter(Fecha == input$FechaAnalisis) %>% 
+      select(Fecha, Cliente, Nombre, Tipo, Calidad, Comentarios)
+  }, ignoreNULL = FALSE)
+  
+  
+  ### Reporte ----
+  #### Individual ----
+  ##### Cajas ----
+  
+  ###### Contacto ----
   output$VB_UltimoContacto <- renderInfoBox({
     req(input$ClienteConsulta)
     aux1 <- as.numeric(abs(as.Date(max(bd_consulta()$Timestamp))-Sys.Date()))
@@ -223,7 +257,7 @@ function(input, output, session) {
     }
   })
   
-  ##### Venta ----
+  ###### Efectiva ----
   output$VB_UltimoVenta <- renderInfoBox({
     req(input$ClienteConsulta)
     df <- bd_consulta() %>% 
@@ -235,7 +269,7 @@ function(input, output, session) {
     if(!is.na(aux2)){
       
       infoBox(
-        value = paste0("Días desde la última venta: ", aux1),
+        value = paste0("Días desde el último contacto efectivo: ", aux1),
         title = "",
         subtitle = paste0("Última venta: ", aux2),
         icon = icon("calendar"),
@@ -261,7 +295,7 @@ function(input, output, session) {
       infoBox(
         value = users[users$User == aux1 ,"Nombre"],
         title = "",
-        subtitle = "Usuario de última compra",
+        subtitle = "Usuario de último contacto efectivo",
         icon = icon("user-check"),
         fill = T,
         color = "red"
@@ -323,10 +357,12 @@ function(input, output, session) {
     if (input$ClienteConsulta != ""){
       aux1 <- bd_consulta() %>% 
         left_join(users, by= c("Usuario"="User")) %>% 
-        mutate(Mes = format(as.Date(Timestamp), "%m-%Y"),
-               Mes = factor(Mes, levels = unique(Mes))) %>% 
-        group_by(Mes) %>% 
-        summarise(Registros = n())
+        complete(Timestamp = seq.Date(min(as.Date(Timestamp)), max(as.Date(Timestamp)), by="month")) %>%
+        mutate(Mes = format(as.Date(Timestamp), "%b%y"),
+               Mes = factor(Mes, levels = unique(Mes)),
+               Aux = ifelse(is.na(Usuario), 0, 1)) %>%
+        group_by(Mes) %>%
+        summarise(Registros = sum(Aux))
       
       plot_ly(data=aux1, x=~Mes, y=~Registros, type = 'scatter', mode = 'linesmarkers', 
               line = list(color = '#515A5A', width = 2),
@@ -335,7 +371,18 @@ function(input, output, session) {
               hovertext = paste("Fecha:", aux1$Mes, 
                                 "<br>Contactos :", comma(aux1$Registros, accuracy = 1))) %>% 
         layout(xaxis = list(gridcolor="#F7F9F9", 
-                            tickfont= list(family = "Arial, sans-serif",size = 14,color = "lightgrey")),
+                            tickfont= list(family = "Arial, sans-serif",size = 14,color = "lightgrey"),
+                            rangeslider = list(visible = T),
+                            rangeselector=list(
+                              buttons=list(
+                                list(count=1, label="1m", step="month", stepmode="backward"),
+                                list(count=6, label="6m", step="month", stepmode="backward"),
+                                list(count=1, label="YTD", step="year", stepmode="todate"),
+                                list(count=1, label="1y", step="year", stepmode="backward"),
+                                list(step="Todos")
+                                )
+                              )
+                            ),
                yaxis = list(tickformat = ",", title="Contactos", gridcolor="#F7F9F9",
                             tickfont= list(family = "Arial, sans-serif",size = 14,color = "lightgrey")),
                paper_bgcolor='rgba(0,0,0,0)',
@@ -344,7 +391,6 @@ function(input, output, session) {
     }
     
   })
-  
   output$Productos <- renderPlotly({
     
     aux1 <- bd_consulta()
@@ -365,5 +411,100 @@ function(input, output, session) {
     
   })
 
+  #### Fechas ----
+  
+  output$ClientesDia = renderDataTable({
+    
+    datatable(bd_fecha(), options = list(dom = 'tp', searching= T, scrollY = "800px",
+                                           language = list(paginate = list('next'="Siguiente", previous="Anterior"))), rownames=F,
+              colnames = c("Fecha", "Cliente", "Trader","Tipo", "Calidad", "Comentarios")
+    )
+    
+  })
+  
+  #### General ----
+  ##### Diagrama de Barras -----
+  
+  RangoDias <- reactiveVal()
+  observeEvent(event_data("plotly_click", source = "Dias"), {
+    RangoDias(event_data("plotly_click", source = "Dias")$y)
+  })
+  output$RangosDias <- renderPlotly({
+    
+    if (is.null(RangoDias())) {
+      aux1 <- bd_general() %>% 
+        group_by(RangoDias) %>% 
+        summarise(Freq=n()) %>% 
+        mutate(current_color = "#566573")
+    } else {
+      aux1 <- bd_general() %>% 
+        group_by(RangoDias) %>% 
+        summarise(Freq=n()) %>% 
+        mutate(current_color = if_else(RangoDias %in% RangoDias(), "#AAB7B8", "#566573"))
+    }
+    
+    aux1$RangoDias <- factor(aux1$RangoDias, levels = c("Más de 90 días", "De 31 a  90 días", "De 16 a 30 días", "De 8 a 15 días", "De 0 a 7 días"))
+    
+    plot_ly(data=aux1, x=~Freq, y=~RangoDias, type = 'bar', source = "Dias", 
+            marker = list(color = ~current_color, line = list(color = "#17202A", width = 1.5)),
+            textposition = 'auto', hoverinfo = "text", text = ~comma(Freq, accuracy = 1),
+            hovertext = paste(aux1$RangoDias,
+                              "<br>", "Clientes: ", comma(aux1$Freq, accuracy = 1))) %>%
+      layout(xaxis = list(gridcolor="#F7F9F9", title="Clientes",
+                          tickfont= list(family = "Arial, sans-serif",size = 14,color = "lightgrey")),
+             yaxis = list(tickformat = ",", title="", gridcolor="#F7F9F9",
+                          tickfont= list(family = "Arial, sans-serif",size = 14)),
+             paper_bgcolor='rgba(0,0,0,0)',
+             plot_bgcolor='rgba(0,0,0,0)') %>%
+      config(displayModeBar=F) %>% 
+      event_register("plotly_click")
+    
+  })
+  
+  ##### Tabla de Resumen -----
+  
+  output$click <- renderText({
+    filtro <- event_data("plotly_click", source = "Dias")$y
+    ifelse(is.null(filtro), "Todos los Clientes", paste("Clientes con contacto ", filtro))
+  })
+  
+  data_print <- reactive({
+    
+    filtro <- event_data("plotly_click", source = "Dias", priority = "event")$y
+    
+    if (is.null(filtro)) {
+      aux1 <- bd_general() %>%
+        mutate(UltimoContacto = format(as.Date(Timestamp), "%d de %B del %Y")) %>% 
+        select(Cliente, UltimoContacto, Dias, Nombre) %>% 
+        arrange(desc(Dias))
+    } else{
+      aux1 <- bd_general() %>%
+        filter(RangoDias == filtro) %>% 
+        mutate(UltimoContacto = format(as.Date(Timestamp), "%d de %B del %Y")) %>% 
+        select(Cliente, UltimoContacto, Dias, Nombre) %>% 
+        arrange(desc(Dias))
+    }
+    
+  })
+  
+  output$DetalleDias = renderDataTable({
+    
+    datatable(data_print(), options = list(dom = 'tp', searching= T, scrollY = "300px",
+                                           language = list(paginate = list('next'="Siguiente", previous="Anterior"))), rownames=F, 
+              colnames = c("Cliente", "Fecha de último contacto", "Días desde último contacto", "Última persona de contacto")
+    )
+    
+  })
+
+  ##### Boton de Descarga -----
+    
+  output$downloadData <- downloadHandler(
+    filename = function() {
+      paste("Clientes.xlsx")
+    },
+    content = function(file) {
+      write_xlsx(data_print(), file)
+    }
+  )
   
 }

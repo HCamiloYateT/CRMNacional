@@ -1,3 +1,9 @@
+# Opciones ----
+options(
+  gargle_oauth_cache = "bb8565617b5e9996ff93e6d214ba7218_",
+  gargle_oauth_email = "camiloyatet@gmail.com"
+)
+
 # librerias ----
 
 library(shiny)
@@ -13,6 +19,7 @@ library(tidyverse)
 library(DT)
 library(plotly)
 library(scales)
+library(writexl)
 
 # Funciones ----
 
@@ -36,17 +43,17 @@ labelObligatorio <- function(label) {
 
 users <- readRDS("data/users.rds")
 
-clientes <- loadData() %>% 
+remota <- loadData()
+
+clientes <- remota %>% 
   select(cliente = Cliente) %>% 
   distinct() %>% 
   bind_rows(readRDS("data/clientes.rds"))
 
-
-prods <- loadData() %>% 
+prods <- remota %>% 
   select(Tipo, Calidad) %>% 
   distinct() %>% 
   bind_rows(readRDS("data/prods.rds"))
-
 
 # Definiciones ----
 
@@ -62,6 +69,7 @@ appCSS <- ".mandatory_star { color: red; }"
 
 customers <- c("", sort(unique(clientes$cliente)))
 tipos <- c("", sort(unique(prods$Tipo)))
+clientes <- c("", sort(unique(remota$Cliente)))
 
 ## Tabs reactivas segun logins ----
 
@@ -82,15 +90,23 @@ tab_registro <- tabPanel(paste("Registro de Contacto"),
                                tags$h2("Ingrese el Contacto", class = "text-center", style = "padding-top: 0;font-weight:600;"),
                                br(),
                                fluidRow(
-                                 column(4, selectizeInput("Cliente", h6(labelObligatorio("Seleccione el Cliente")),  
-                                                          choices = customers, selected ="", options=list(create=TRUE))),
+                                 column(3, selectizeInput("Cliente", h6(labelObligatorio("Seleccione el Cliente")),  
+                                                          choices = clientes, selected ="", options=list(create=TRUE))),
                                  column(4, selectizeInput("Tipo", h6(labelObligatorio("Seleccione el Tipo de Producto")), 
                                                           choices=tipos, selected ="", options=list(create=TRUE))),
                                  column(3, selectizeInput("Calidad", h6(labelObligatorio("Seleccione el Producto")), 
                                                           choices="", selected ="", options=list(create=TRUE))),
-                                 column(1, br(),br(),br(),
-                                        prettyToggle(inputId = "Venta", label_on = "Venta", label_off = "No", outline = TRUE, bigger = T,
+                                 column(2, br(),br(),br(),
+                                        prettyToggle(inputId = "Venta", label_on = "Efectivo", label_off = "No Efectivo", outline = TRUE, bigger = T,
                                                         plain = TRUE, icon_on = icon("thumbs-up"), icon_off = icon("thumbs-down")))
+                                 ),
+                               br(),
+                               fluidRow(
+                                 column(1),
+                                 column(10,
+                                        textAreaInput("caption", h6("Comentarios"), "", placeholder="Ingrese comentarios", width = "100%")
+                                        ),
+                                 column(1),
                                  ),
                                br(),
                                fluidRow(
@@ -146,9 +162,41 @@ tab_analisis <- navbarMenu("Análisis de Contacto",
                                     br(),
                                     HTML('<center><img src="logo2.png" width="90" height="90"></center>')
                                     ),
-                           tabPanel("Análisis General", icon = icon("users"),
-                                    "General",
+                           tabPanel("Análisis por Fecha", icon = icon("calendar"),
+                                    fluidRow(
+                                      column(6, dateInput("FechaAnalisis", label = h6("Ingrese la Fecha"), value = as.Date(Sys.Date()),
+                                                          format = "yyyy/mm/dd", language = "es", max = as.Date(Sys.Date()), 
+                                                          autoclose = T, width = "100%")),
+                                      column(1, 
+                                             div(class = "buttonagency",
+                                                 actionBttn(inputId = "Refresh", label = NULL, style = "simple", color = "primary",
+                                                            icon = icon("sync")
+                                                            )
+                                                 ) , align = "center" , style = "margin-top: 50px;" , style = "margin-left: -40px;")
+                                      ),
+                                    fluidRow(
+                                      dataTableOutput("ClientesDia", width = "100%")
+                                      ),
                                     br(),
-                                    HTML('<center><img src="logo2.png" width="90" height="90"></center>'))
+                                    HTML('<center><img src="logo2.png" width="90" height="90"></center>')
+                                    ),
+                           tabPanel("Análisis General", icon = icon("users"),
+                                    fluidRow(
+                                      column(6, 
+                                             h5("Días desde el Último Contacto"), 
+                                             plotlyOutput("RangosDias", height = "400px")
+                                             ),
+                                      column(6, h5("Listado de Clientes"), 
+                                             textOutput("click"),
+                                             dataTableOutput("DetalleDias", width = "100%")
+                                             )
+                                    ),
+                                    fluidRow(
+                                      column(6),
+                                      column(2, downloadButton('downloadData', 'Descargar', width = "100%"))
+                                    ),
+                                    br(),
+                                    HTML('<center><img src="logo2.png" width="90" height="90"></center>')
+                                    )
                            )
 
