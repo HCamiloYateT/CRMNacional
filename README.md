@@ -1,5 +1,5 @@
 # Shiny Apps
-Repositorio con las aplicaciones shiny desarrolladas para analítica en Racafé
+Repositorio con las aplicaciones shiny desarrolladas
 
 | Aplicación | Descripción                     | Contenidos | Librerias       |
 |------------|---------------------------------|------------|-----------------|
