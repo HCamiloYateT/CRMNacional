@@ -1,25 +1,80 @@
 function(input, output, session) { 
   
+  ### Configuracion Logins ----
+  
+  credentials <- shinyauthr::loginServer(
+    id = "login",
+    data = users,
+    user_col = "User",
+    pwd_col = "Pass",
+    sodium_hashed = F,
+    reload_on_logout = TRUE,
+    log_out = reactive(logout_init())
+  )
+  
+  logout_init <- shinyauthr::logoutServer(
+    id = "logout",
+    active = reactive(credentials()$user_auth)
+  )
+  
+  observeEvent(credentials()$user_auth, {
+    
+    if (credentials()$user_auth) { 
+      
+      sendSweetAlert(
+        session = session,
+        title = "",
+        text = h4(paste(ifelse(user_info()$Genero == "F", "Bienvenida ", "Bienvenido "), user_info()$Nombre)),
+        type = "success", closeOnClickOutside = T, showCloseButton = T, width = "300px"
+      )
+      removeTab("tabs", "login")
+      appendTab("tabs", tab_informe, select = TRUE)
+    }
+  })
+  
+  
   # Datos Reactivos ----
   
+  user_info <- reactive({credentials()$info})
+  
+  data_usuario <- reactive({
+    
+    if(user_info()$Trilladora == "Todas"){
+      data
+    } else{
+      data %>% filter(Sucursal == user_info()$Trilladora)
+    }
+    
+  })
+  output$picker2 <- renderUI({
+    choices = sort(unique(data_usuario()$Sucursal))
+    pickerInput("Sucursal",h6("Seleccione la Sucursal"), choices = choices, selected = choices[1], multiple = FALSE,
+                options = pickerOptions(`actions-box` = T, `selected-text-format` = "count > 1",
+                                        selectAllText = "Seleccionar Todo",
+                                        deselectAllText = "Limpiar Todo",
+                                        noneSelectedText = "Sin Seleccion",
+                                        virtualScroll = T))
+  })
+
   fecha_focal <- reactive({
     max(input$Fecha)
   })
   data_trilladora <- reactive({
     
-    data %>% 
-      filter(Sucursal %in% input$Sucursal)
+    data_usuario() %>% 
+      filter(
+        Sucursal %in% input$Sucursal)
     
   })
   data_f <- reactive({
     
     if(length(input$Fecha) == 1) {
-      data %>% 
+      data_usuario() %>% 
         filter(Sucursal == input$Sucursal,
                floor_date(Fecha, unit = "month") == floor_date(input$Fecha, unit = "month")
         )
     } else {
-      data %>% 
+      data_usuario() %>% 
         filter(Sucursal == input$Sucursal,
                dplyr::between(floor_date(Fecha, unit = "month"), floor_date(input$Fecha[1], unit = "month"), 
                               floor_date(input$Fecha[2], unit = "month")))
@@ -28,7 +83,7 @@ function(input, output, session) {
   data_per_ant_f <- reactive({
     
     if(length(input$Fecha) == 1) {
-      data %>% 
+      data_usuario() %>% 
         filter(Sucursal == input$Sucursal,
                floor_date(Fecha, unit = "month") == floor_date(input$Fecha, unit = "month") - months(1)
         )
@@ -36,7 +91,7 @@ function(input, output, session) {
       
       n_mes = interval(floor_date(input$Fecha[1], unit = "month"), floor_date(input$Fecha[2], unit = "month")) %/% months(1) + 1
       
-      data %>% 
+      data_usuario() %>% 
         filter(Sucursal == input$Sucursal,
                dplyr::between(floor_date(Fecha, unit = "month"), floor_date(input$Fecha[1], unit = "month") - months(n_mes), 
                               floor_date(input$Fecha[2], unit = "month") - months(n_mes) ))
@@ -45,21 +100,20 @@ function(input, output, session) {
   data_an_ant_f <- reactive({
     
     if(length(input$Fecha) == 1) {
-      data %>% 
+      data_usuario() %>% 
         filter(Sucursal == input$Sucursal,
                floor_date(Fecha, unit = "month") == floor_date(input$Fecha, unit = "month") - years(1)
         )
     } else {
-      data %>% 
+      data_usuario() %>% 
         filter(Sucursal == input$Sucursal,
                dplyr::between(floor_date(Fecha, unit = "month"), floor_date(input$Fecha[1], unit = "month") - years(1), 
                               floor_date(input$Fecha[2], unit = "month") - years(1) ))
     }
   })
   
-  
   # Indicadores de Gestión -----
-  
+
   output$MesAnalisis <- renderUI({
     if(length(input$Fecha) == 1) h4(paste("Indicadores de gestion de la trilladora", input$Sucursal, "en", format(input$Fecha, "%B %Y")))
     else h4(paste("Indicadores de gestion de la trilladora", input$Sucursal, "entre", 
@@ -268,7 +322,7 @@ function(input, output, session) {
     
     plot_ly(data = aux1, x = ~Mes, y = ~Acum, type = 'bar', color = ~factor(Periodo), colors = c("2021"="#2E4053", "2022"="#2980B9"),
             hoverinfo = "text", hovertext = paste0("<b>", aux1$Periodo*100+aux1$Mes, "</b>",
-                                                   "<br>Despachos :", comma(aux1$Acum, accuracy = 1),
+                                                   "<br>Compras :", comma(aux1$Acum, accuracy = 1),
                                                    "<br>Cumplimiento :", percent(aux1$Cump, accuracy = 0.1))) %>% 
       add_bars(data=pron, x= ~Mes, y = ~Pron, inherit = F, name="Estimación 2022",
                marker = list(color = "#707B7C", line = list(color = "black", width = 1)),
@@ -553,7 +607,7 @@ function(input, output, session) {
     
     plot_ly(data = aux1, x = ~Mes, y = ~Acum, type = 'bar', color = ~factor(Periodo), colors = c("2021"="#2E4053", "2022"="#2980B9"),
             hoverinfo = "text", hovertext = paste0("<b>", aux1$Periodo*100+aux1$Mes, "</b>",
-                                                   "<br>Despachos :", comma(aux1$Acum, accuracy = 1),
+                                                   "<br>Producción :", comma(aux1$Acum, accuracy = 1),
                                                    "<br>Cumplimiento :", percent(aux1$Cump, accuracy = 0.1))) %>% 
       add_bars(data=pron, x= ~Mes, y = ~Pron, inherit = F, name="Estimación 2022",
                marker = list(color = "#707B7C", line = list(color = "black", width = 1)),
@@ -680,8 +734,8 @@ function(input, output, session) {
     infoBox(
       value = tags$p(style = "font-size: 24px;", paste(comma(aux1, accuracy = 1), "Sacos")),
       title = "Despachos:",
-      subtitle = HTML(paste("Acumulado a", format(fecha_focal(), "%b %Y"), ":", comma(aux2), "Kg", br(), 
-                            "Acumulado a", format(fecha_focal() - years(1) , "%b %Y"), ":", comma(aux3), "Kg", br(),
+      subtitle = HTML(paste("Acumulado a", format(fecha_focal(), "%b %Y"), ":", comma(aux2), "sacos", br(), 
+                            "Acumulado a", format(fecha_focal() - years(1) , "%b %Y"), ":", comma(aux3), "sacos", br(),
                             "Variación", chr_kpi(variacion), percent(variacion, accuracy = 0.1))),
       icon = icon("shipping-fast"),
       fill = T,
@@ -945,7 +999,7 @@ function(input, output, session) {
     
     plot_ly(data = aux1, x = ~Mes, y = ~Acum, type = 'bar', color = ~factor(Periodo), colors = c("2021"="#2E4053", "2022"="#2980B9"),
             hoverinfo = "text", hovertext = paste0("<b>", aux1$Periodo*100+aux1$Mes, "</b>",
-                                                   "<br>Despachos :", comma(aux1$Acum, accuracy = 1),
+                                                   "<br>Rechazos :", comma(aux1$Acum, accuracy = 1),
                                                    "<br>Cumplimiento :", percent(aux1$Cump, accuracy = 0.1))) %>% 
       add_bars(data=pron, x= ~Mes, y = ~Pron, inherit = F, name="Estimación 2022",
                marker = list(color = "#707B7C", line = list(color = "black", width = 1)),
@@ -1219,12 +1273,12 @@ function(input, output, session) {
     
     plot_ly(data = aux1, x = ~Mes, y = ~Acum, type = 'bar', color = ~factor(Periodo), colors = c("2021"="#2E4053", "2022"="#2980B9"),
             hoverinfo = "text", hovertext = paste0("<b>", aux1$Periodo*100+aux1$Mes, "</b>",
-                                                   "<br>Despachos :", comma(aux1$Acum, accuracy = 1),
+                                                   "<br>Ingresos :", comma(aux1$Acum, accuracy = 1),
                                                    "<br>Cumplimiento :", percent(aux1$Cump, accuracy = 0.1))) %>% 
       add_bars(data=pron, x= ~Mes, y = ~Pron, inherit = F, name="Estimación 2022",
                marker = list(color = "#707B7C", line = list(color = "black", width = 1)),
                hoverinfo = "text", hovertext = paste0("<b>", 2021*100+pron$Mes, "</b>",
-                                                      "<br>Despachos :", comma(pron$Pron, accuracy = 1),
+                                                      "<br>Ingresos :", comma(pron$Pron, accuracy = 1),
                                                       "<br>Cumplimiento :", percent(pron$Cump, accuracy = 0.1))) %>% 
       layout(shapes = hline(meta),
              hoverlabel = list(align ="left"),
@@ -1270,12 +1324,12 @@ function(input, output, session) {
     
     plot_ly(data = aux1, x = ~Mes, y = ~Acum, type = 'bar', color = ~factor(Periodo), colors = c("2021"="#2E4053", "2022"="#2980B9"),
             hoverinfo = "text", hovertext = paste0("<b>", aux1$Periodo*100+aux1$Mes, "</b>",
-                                                   "<br>Despachos :", comma(aux1$Acum, accuracy = 1),
+                                                   "<br>Otros Ingresos :", comma(aux1$Acum, accuracy = 1),
                                                    "<br>Cumplimiento :", percent(aux1$Cump, accuracy = 0.1))) %>% 
       add_bars(data=pron, x= ~Mes, y = ~Pron, inherit = F, name="Estimación 2022",
                marker = list(color = "#707B7C", line = list(color = "black", width = 1)),
                hoverinfo = "text", hovertext = paste0("<b>", 2021*100+pron$Mes, "</b>",
-                                                      "<br>Despachos :", comma(pron$Pron, accuracy = 1),
+                                                      "<br>Otros Ingresos :", comma(pron$Pron, accuracy = 1),
                                                       "<br>Cumplimiento :", percent(pron$Cump, accuracy = 0.1))) %>% 
       layout(shapes = hline(meta),
              hoverlabel = list(align ="left"),
@@ -1603,9 +1657,9 @@ function(input, output, session) {
     ) %>%
       mutate(parents = ifelse(parents == "Otros", "Otros Costos", parents)) %>% 
       filter(labels != "Otros") %>% 
-      mutate(Texto = case_when(parents == "" ~ "<b>%{label}</b><br>%{value:,} sacos<extra></extra>",
-                               parents == "Despachos" ~ "<b>%{label}</b><br>%{value:,} sacos<br>%{percentParent:.2%} de %{parent}<extra></extra>",
-                               T ~ "<b>%{label}</b><br>%{value:,} sacos<br>%{percentParent:.2%} de %{parent}<br>%{percentEntry:.2%} de Producción<extra></extra>"
+      mutate(Texto = case_when(parents == "" ~ "<b>%{label}</b><br>%{value:$,}<extra></extra>",
+                               parents == "Despachos" ~ "<b>%{label}</b><br>%{value:$,}<br>%{percentParent:.2%} de %{parent}<extra></extra>",
+                               T ~ "<b>%{label}</b><br>%{value:$,}<br>%{percentParent:.2%} de %{parent}<br>%{percentEntry:.2%} de Costos<extra></extra>"
       )
       )
     
@@ -1652,12 +1706,12 @@ function(input, output, session) {
     
     plot_ly(data = aux1, x = ~Mes, y = ~Acum, type = 'bar', color = ~factor(Periodo), colors = c("2021"="#2E4053", "2022"="#2980B9"),
             hoverinfo = "text", hovertext = paste0("<b>", aux1$Periodo*100+aux1$Mes, "</b>",
-                                                   "<br>Despachos :", comma(aux1$Acum, accuracy = 1),
+                                                   "<br>Costos :", comma(aux1$Acum, accuracy = 1),
                                                    "<br>Cumplimiento :", percent(aux1$Cump, accuracy = 0.1))) %>% 
       add_bars(data=pron, x= ~Mes, y = ~Pron, inherit = F, name="Estimación 2022",
                marker = list(color = "#707B7C", line = list(color = "black", width = 1)),
                hoverinfo = "text", hovertext = paste0("<b>", 2021*100+pron$Mes, "</b>",
-                                                      "<br>Despachos :", comma(pron$Pron, accuracy = 1),
+                                                      "<br>Costos :", comma(pron$Pron, accuracy = 1),
                                                       "<br>Cumplimiento :", percent(pron$Cump, accuracy = 0.1))) %>% 
       layout(shapes = hline(meta),
              hoverlabel = list(align ="left"),
@@ -1801,7 +1855,7 @@ function(input, output, session) {
             textposition = 'bottom', text = ~comma(aux1$Valor, accuracy = 1), 
             hoverlabel = list(align = "left"), hoverinfo = "text",
             hovertext = paste0("<b>", str_to_title(format(aux1$Fecha, "%B %Y")), "</b>",
-                               "<br>",str_to_sentence(aux1$Subseccion)," :", dollar(aux2$Valor, accuracy = 1))
+                               "<br>",str_to_sentence(aux1$Subseccion)," :", dollar(aux1$Valor, accuracy = 1))
     ) %>% 
       layout(title = list(text="", 
                           font=list(family = "Arial, sans-serif",size = 18,color = "#17202A")),
@@ -1844,7 +1898,7 @@ function(input, output, session) {
             textposition = 'bottom', text = ~comma(aux1$Valor, accuracy = 1), 
             hoverlabel = list(align = "left"), hoverinfo = "text",
             hovertext = paste0("<b>", str_to_title(format(aux1$Fecha, "%B %Y")), "</b>",
-                               "<br>",str_to_sentence(aux1$Tipo)," :", dollar(aux2$Valor, accuracy = 1))
+                               "<br>",str_to_sentence(aux1$Tipo)," :", dollar(aux1$Valor, accuracy = 1))
     ) %>% 
       layout(title = list(text="", 
                           font=list(family = "Arial, sans-serif",size = 18,color = "#17202A")),
@@ -1886,7 +1940,7 @@ function(input, output, session) {
             textposition = 'bottom', text = ~comma(aux1$Valor, accuracy = 1), 
             hoverlabel = list(align = "left"), hoverinfo = "text",
             hovertext = paste0("<b>", str_to_title(format(aux1$Fecha, "%B %Y")), "</b>",
-                               "<br>",str_to_sentence(aux1$Item)," :", dollar(aux2$Valor, accuracy = 1))
+                               "<br>",str_to_sentence(aux1$Item)," :", dollar(aux1$Valor, accuracy = 1))
     ) %>% 
       layout(title = list(text="", 
                           font=list(family = "Arial, sans-serif",size = 18,color = "#17202A")),
@@ -2383,9 +2437,9 @@ function(input, output, session) {
     
     meta = 3.2
     
-    lim1 = 2.5
+    lim1 = 3.2
     lim2 = 3.5
-    lim3 = 4
+    lim3 = 5
     
     fig <- plot_ly(
       domain = list(x = c(0, 1), y = c(0, 1)),
@@ -2444,10 +2498,10 @@ function(input, output, session) {
       filter(Item == "% Supremos /Total excelsos") %>% 
       summarise(sum(Valor)) %>% as.numeric()
     
-    meta = 0.50
+    meta = 0.33
     
-    lim1 = 0.40
-    lim2 = 0.80
+    lim1 = 0.25
+    lim2 = 0.33
     lim3 = 1
     
     fig <- plot_ly(
@@ -2565,7 +2619,7 @@ function(input, output, session) {
     
   })
   
-  ### Operacion Logistica
+  ### Operacion Logistica ----
   
   output$GaugeEficienciaFlete <- renderPlotly({
     
@@ -2575,8 +2629,8 @@ function(input, output, session) {
     
     meta = 0.93
     
-    lim1 = 0.93
-    lim2 = 1.2
+    lim1 = 0.85
+    lim2 = 0.93
     lim3 = 1.5
     
     fig <- plot_ly(
@@ -2702,8 +2756,8 @@ function(input, output, session) {
     
     meta = 0.96
     
-    lim1 = 0.93
-    lim2 = 1.2
+    lim1 = 0.90
+    lim2 = 0.96
     lim3 = 1.5
     
     fig <- plot_ly(
@@ -2813,7 +2867,7 @@ function(input, output, session) {
     
   })
   
-  ### Talento Humanos ----
+  ### Talento Humano   ----
   
   output$GaugeMovXSaco <- renderPlotly({
     
@@ -2900,7 +2954,7 @@ function(input, output, session) {
             textposition = 'bottom', text = ~comma(aux2$Valor, accuracy = 1), 
             hoverlabel = list(align = "left"), hoverinfo = "text",
             hovertext = paste0("<b>", str_to_title(format(aux2$Fecha, "%B %Y")), "</b>",
-                               "<br>",str_to_sentence(trimws(var_plot))," :", percent(aux2$Valor, accuracy = 0.01))
+                               "<br>",str_to_sentence(trimws(var_plot))," :", dollar(aux2$Valor, accuracy = 1))
     ) %>% 
       add_ribbons(data= aux3 , x = ~Fecha, ymin = ~yhat_lower, ymax = ~yhat_upper, 
                   color = I("#AAB7B8"), name = "IC", inherit = F, hoverinfo = "text", 
