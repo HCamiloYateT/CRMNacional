@@ -265,6 +265,19 @@ Formatod3 <- function(formato){
   }
   return(formato)
 }
+FormatoHOT <- function(formato){
+  # Define el formato para un numero segun su tipo: coma, numero, dinero, porcentaje
+  formato <- if(formato == "coma"){
+    "0,0"
+  } else if(formato == "numero"){
+    "0,0.00"
+  } else if(formato == "dinero"){
+    "$0,0.00"
+  } else if(formato == "porcentaje"){
+    "%0,0.00"
+  }
+  return(formato)
+}  
 FormatoJS <- function(formato){
   # Define el formato para un numero segun su tipo: coma, numero, dinero, porcentaje
   formato <- if(formato == "coma"){
