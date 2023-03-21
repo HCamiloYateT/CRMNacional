@@ -108,6 +108,50 @@ FechaCorta <- function(x){
   x <- str_to_title(paste(mes, format(x, "%y")))
   return(x)
 }
+FormatoFechaCompleta <- function(x){
+  require(lubridate)
+  require(stringr)
+  # Retorna una fecha completa en formato mes abreviado y año en tipo titulo
+  
+  mes <- case_when(month(x)==1 ~ "Enero",
+                   month(x)==2 ~ "Febrero",
+                   month(x)==3 ~ "Marzo",
+                   month(x)==4 ~ "Abril",
+                   month(x)==5 ~ "Mayo",
+                   month(x)==6 ~ "Junio",
+                   month(x)==7 ~ "Julio",
+                   month(x)==8 ~ "Agosto",
+                   month(x)==9 ~ "Septiembre",
+                   month(x)==10 ~ "Octubre",
+                   month(x)==11 ~ "Noviembre",
+                   month(x)==12 ~ "Diciembre",
+  )
+  
+  x <- paste(day(x), "de", mes, "del", year(x))
+  return(x)
+}
+FormatoFechaAbreviada <- function(x){
+  require(lubridate)
+  require(stringr)
+  # Retorna una fecha completa en formato mes abreviado y año en tipo titulo
+  
+  mes <- case_when(month(x)==1 ~ "ene",
+                   month(x)==2 ~ "feb",
+                   month(x)==3 ~ "mar",
+                   month(x)==4 ~ "abr",
+                   month(x)==5 ~ "may",
+                   month(x)==6 ~ "jun",
+                   month(x)==7 ~ "jul",
+                   month(x)==8 ~ "ago",
+                   month(x)==9 ~ "sep",
+                   month(x)==10 ~ "oct",
+                   month(x)==11 ~ "nov",
+                   month(x)==12 ~ "dic",
+  )
+  
+  x <- paste(day(x), mes, format(x, "%y"))
+  return(x)
+}
 Edad = function(from, to) {
   from_lt = as.POSIXlt(from)
   to_lt = as.POSIXlt(to)
