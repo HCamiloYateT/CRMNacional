@@ -113,18 +113,18 @@ FormatoFechaCompleta <- function(x){
   require(stringr)
   # Retorna una fecha completa en formato mes abreviado y año en tipo titulo
   
-  mes <- case_when(month(x)==1 ~ "Enero",
-                   month(x)==2 ~ "Febrero",
-                   month(x)==3 ~ "Marzo",
-                   month(x)==4 ~ "Abril",
-                   month(x)==5 ~ "Mayo",
-                   month(x)==6 ~ "Junio",
-                   month(x)==7 ~ "Julio",
-                   month(x)==8 ~ "Agosto",
-                   month(x)==9 ~ "Septiembre",
-                   month(x)==10 ~ "Octubre",
-                   month(x)==11 ~ "Noviembre",
-                   month(x)==12 ~ "Diciembre",
+  mes <- case_when(month(x)==1 ~ "enero",
+                   month(x)==2 ~ "febrero",
+                   month(x)==3 ~ "marzo",
+                   month(x)==4 ~ "abril",
+                   month(x)==5 ~ "mayo",
+                   month(x)==6 ~ "junio",
+                   month(x)==7 ~ "julio",
+                   month(x)==8 ~ "agosto",
+                   month(x)==9 ~ "septiembre",
+                   month(x)==10 ~ "octubre",
+                   month(x)==11 ~ "noviembre",
+                   month(x)==12 ~ "diciembre",
   )
   
   x <- paste(day(x), "de", mes, "del", year(x))
