@@ -299,7 +299,7 @@ DefinirFormato <- function(formato){
 Formatod3 <- function(formato){
   # Define el formato para un numero segun su tipo: coma, numero, dinero, porcentaje
   formato <- if(formato == "coma"){
-    ",.0"
+    ","
   } else if(formato == "numero"){
     ",.3"
   } else if(formato == "dinero"){
