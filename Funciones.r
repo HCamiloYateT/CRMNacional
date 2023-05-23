@@ -1,19 +1,48 @@
 # Funciones ----
 
 ## Paquetes ----
-Loadpkg <- function(pkg){
+Loadpkg <- function(pkg) {
+# Descripción: Carga los paquetes especificados en el entorno de trabajo.
+# Parámetros:
+#   - pkg: Un vector de caracteres que contiene los nombres de los paquetes que se desean cargar.
+# Valor de retorno:
+#   - Ninguno.
+
   new.pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
   if (length(new.pkg)) 
-    install.packages(new.pkg, dependencies = T)
+    install.packages(new.pkg, dependencies = TRUE)
   sapply(pkg, require, character.only = TRUE)
 }
 
 ## Cadenas de Caracteres ----
-LimpiarNombres <- function(s){
-  x<-trimws(str_to_upper(gsub("([\\s])\\1+","\\1",s, perl=T)))
+LimpiarCadena <- function(x, rem_espacios = T, rem_numeros=T, rem_caresp =T, rem_acentos = T){
+  # Descripción: Limpia una cadena de texto aplicando diferentes transformaciones.
+  # Parámetros:
+  #   - x: La cadena de texto a limpiar.
+  #   - rem_espacios: (Opcional) Un valor lógico que indica si se deben eliminar los espacios en blanco (predeterminado: TRUE).
+  #   - rem_numeros: (Opcional) Un valor lógico que indica si se deben eliminar los números (predeterminado: TRUE).
+  #   - rem_caresp: (Opcional) Un valor lógico que indica si se deben eliminar los caracteres especiales (predeterminado: TRUE).
+  #   - rem_acentos: (Opcional) Un valor lógico que indica si se deben eliminar los acentos (predeterminado: TRUE).
+  # Valor de retorno:
+  #   - La cadena de texto resultante después de aplicar las transformaciones especificadas.
+  
+  x <- trimws(str_to_upper(gsub("([\\s])\\1+","\\1", x, perl=T)))
+  x <- ifelse(rem_espacios, gsub("\\s", "",x), x)
+  x <- ifelse(rem_numeros, gsub("\\d", "",x), x)
+  x <- ifelse(rem_caresp, gsub("[^[:alnum:]]", "",x), x)
+  x <- ifelse(rem_caresp, iconv(x, from = 'UTF-8', to = 'ASCII//TRANSLIT'), x)
   return(x)
 }
-Unir.Cadenas <- function(..., sep = " ", collapse = NULL, na.rm = F) {
+UnirCadenas <- function(..., sep = " ", collapse = NULL, na.rm = F) {
+  # Descripción: Une múltiples cadenas de texto en una sola cadena. Difiere de `paste` ya que permite omitir valores ausentes
+  # Parámetros:
+  #   - ...: Las cadenas de texto a unir.
+  #   - sep: (Opcional) El separador a utilizar entre las cadenas (predeterminado: " ").
+  #   - collapse: (Opcional) El separador a utilizar entre las cadenas resultantes (predeterminado: NULL).
+  #   - na.rm: (Opcional) Un valor lógico que indica si se deben eliminar los valores NA (predeterminado: FALSE).
+  # Valor de retorno:
+  #   - La cadena de texto resultante después de unir las cadenas especificadas.
+  
   if (na.rm == F)
     paste(..., sep = sep, collapse = collapse)
   else
@@ -26,7 +55,6 @@ Unir.Cadenas <- function(..., sep = " ", collapse = NULL, na.rm = F) {
       }
       df <- data.frame(..., stringsAsFactors = F)
       ret <- apply(df, 1, FUN = function(x) paste.na(x, sep))
-      
       if (is.null(collapse))
         ret
       else {
@@ -35,12 +63,25 @@ Unir.Cadenas <- function(..., sep = " ", collapse = NULL, na.rm = F) {
     }
 }
 
-## Numeros ----
-sierror_0 <- function(x){
+## Números ----
+SiError_0 <- function(x){
+  # Descripción: Reemplaza los valores NaN, Inf y -Inf en un vector numérico por 0.
+  # Parámetros:
+  #   - x: El vector numérico en el que se buscarán los valores NaN, Inf y -Inf.
+  # Valor de retorno:
+  #   - Un nuevo vector numérico con los valores NaN, Inf y -Inf reemplazados por 0.
+  
+  
   ifelse(x %in% c(NaN, Inf, -Inf),  0, x)
 }
 Variacion <- function(ini, fin){
-  # Calcula la variacion porcentual entre un nuero inicial y uno final
+  # Descripción: Calcula la variación porcentual entre un número inicial y uno final.
+  # Parámetros:
+  #   - ini: El número inicial.
+  #   - fin: El número final.
+  # Valor de retorno:
+  #   - La variación porcentual entre el número inicial y el número final.
+  
   var  <-  if(ini == 0 & fin == 0){
     0
   } else if (ini == 0 ){
@@ -52,7 +93,15 @@ Variacion <- function(ini, fin){
   }
   return(var)
 }
-Moda <- function(x, na.rm = FALSE) {
+Moda <- function(x, na.rm = TURE) {
+  # Descripción: Calcula la moda de un vector numérico o categórico.
+  # Parámetros:
+  #   - x: El vector numérico o categórico del cual se desea calcular la moda.
+  #   - na.rm: (Opcional) Un valor lógico que indica si se deben excluir los valores NA en el cálculo de la moda (predeterminado: TRUE).
+  # Valor de retorno:
+  #   - La moda del vector, es decir, el valor que aparece con mayor frecuencia.
+  
+  
   if(na.rm){
     x = x[!is.na(x)]
   }
@@ -62,97 +111,55 @@ Moda <- function(x, na.rm = FALSE) {
 
 ## Fechas ----
 PrimerDia <- function(x){
-  # Retorna el primer dia del mes de una fecha data
+  # Descripción: Calcula el primer día del mes de una fecha dada.
+  # Parámetros:
+  #   - x: La fecha de la cual se desea obtener el primer día del mes.
+  # Valor de retorno:
+  #   - La fecha correspondiente al primer día del mes de la fecha dada.
+  
+  require(lubridate)
   x <- lubridate::floor_date(as.Date(x), unit = "month")
 }
-FechaLarga <- function(x){
+FechaTexto <- function(x, dia = T, dia_nombre = T, dia_nom_abr = T, mes = T, mes_abr = T, anho = T, anho_abr = T, sep_texto=T){
+  # Descripción: Convierte una fecha en formato de texto personalizado.
+  # Parámetros:
+  #   - x: La fecha que se desea convertir.
+  #   - dia: (Opcional) Un valor lógico que indica si se debe incluir el día (predeterminado: TRUE).
+  #   - dia_nombre: (Opcional) Un valor lógico que indica si se debe incluir el nombre completo del día (predeterminado: TRUE).
+  #   - dia_nom_abr: (Opcional) Un valor lógico que indica si se debe incluir el nombre abreviado del día (predeterminado: TRUE).
+  #   - mes: (Opcional) Un valor lógico que indica si se debe incluir el mes (predeterminado: TRUE).
+  #   - mes_abr: (Opcional) Un valor lógico que indica si se debe incluir el nombre abreviado del mes (predeterminado: TRUE).
+  #   - anho: (Opcional) Un valor lógico que indica si se debe incluir el año (predeterminado: TRUE).
+  #   - anho_abr: (Opcional) Un valor lógico que indica si se debe incluir el año abreviado (predeterminado: TRUE).
+  #   - sep_texto: (Opcional) Un valor lógico que indica si se debe incluir un separador de texto entre las partes de la fecha (predeterminado: TRUE).
+  # Valor de retorno:
+  #   - La fecha convertida en formato de texto personalizado.
+  
   require(lubridate)
   require(stringr)
-  # Retorna una fecha en formato mes completo y año en tipo titulo
+  d <- ifelse(dia, day(x), NA)
+  dia_l <- c('Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo')
+  dia_c <- c('lun','mar','mié','jue','vie','sáb','dom')
+  dn <-ifelse(dia_nombre, ifelse(dia_nom_abr, dia_c[wday(x, week_start = 1)], dia_l[wday(x, week_start = 1)]), NA)
   
-  mes <- case_when(month(x)==1 ~ "Enero",
-                   month(x)==2 ~ "Febrero",
-                   month(x)==3 ~ "Marzo",
-                   month(x)==4 ~ "Abril",
-                   month(x)==5 ~ "Mayo",
-                   month(x)==6 ~ "Junio",
-                   month(x)==7 ~ "Julio",
-                   month(x)==8 ~ "Agosto",
-                   month(x)==9 ~ "Septiembre",
-                   month(x)==10 ~ "Octubre",
-                   month(x)==11 ~ "Noviembre",
-                   month(x)==12 ~ "Diciembre",
-  )
-  x <- str_to_title(paste(mes, year(x)))
-  return(x)
+  mes_l <- c('Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre')
+  mes_c <- c('Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic')
+  m <- ifelse(mes, ifelse(mes_abr, mes_c[month(x)], mes_l[month(x)]), NA)
+  y <- ifelse(anho, ifelse(anho_abr, format(x, "%y"), format(x, "%Y")),NA)
+  
+  
+  res <- UnirCadenas(dn,  UnirCadenas(d,m,y, sep = ifelse(sep_texto, " de ", ""), na.rm = T), sep=", ", na.rm = T)
+  
+  return(res)
 }
-FechaCorta <- function(x){
-  require(lubridate)
-  require(stringr)
-  # Retorna una fecha en formato mes abreviado y año en tipo titulo
+EdadCumplida <- function(from, to) {
+  # Descripción: Calcula la edad en años entre dos fechas.
+  # Parámetros:
+  #   - from: La fecha de inicio (fecha de nacimiento).
+  #   - to: La fecha final (fecha actual).
+  # Valor de retorno:
+  #   - La edad en años entre las dos fechas.
   
-  mes <- case_when(month(x)==1 ~ "Ene",
-                   month(x)==2 ~ "Feb",
-                   month(x)==3 ~ "Mar",
-                   month(x)==4 ~ "Abr",
-                   month(x)==5 ~ "May",
-                   month(x)==6 ~ "Jun",
-                   month(x)==7 ~ "Jul",
-                   month(x)==8 ~ "Ago",
-                   month(x)==9 ~ "Sep",
-                   month(x)==10 ~ "Oct",
-                   month(x)==11 ~ "Nov",
-                   month(x)==12 ~ "Dic",
-  )
-  
-  x <- str_to_title(paste(mes, format(x, "%y")))
-  return(x)
-}
-FormatoFechaCompleta <- function(x){
-  require(lubridate)
-  require(stringr)
-  # Retorna una fecha completa en formato mes abreviado y año en tipo titulo
-  
-  mes <- case_when(month(x)==1 ~ "enero",
-                   month(x)==2 ~ "febrero",
-                   month(x)==3 ~ "marzo",
-                   month(x)==4 ~ "abril",
-                   month(x)==5 ~ "mayo",
-                   month(x)==6 ~ "junio",
-                   month(x)==7 ~ "julio",
-                   month(x)==8 ~ "agosto",
-                   month(x)==9 ~ "septiembre",
-                   month(x)==10 ~ "octubre",
-                   month(x)==11 ~ "noviembre",
-                   month(x)==12 ~ "diciembre",
-  )
-  
-  x <- paste(day(x), "de", mes, "del", year(x))
-  return(x)
-}
-FormatoFechaAbreviada <- function(x){
-  require(lubridate)
-  require(stringr)
-  # Retorna una fecha completa en formato mes abreviado y año en tipo titulo
-  
-  mes <- case_when(month(x)==1 ~ "ene",
-                   month(x)==2 ~ "feb",
-                   month(x)==3 ~ "mar",
-                   month(x)==4 ~ "abr",
-                   month(x)==5 ~ "may",
-                   month(x)==6 ~ "jun",
-                   month(x)==7 ~ "jul",
-                   month(x)==8 ~ "ago",
-                   month(x)==9 ~ "sep",
-                   month(x)==10 ~ "oct",
-                   month(x)==11 ~ "nov",
-                   month(x)==12 ~ "dic",
-  )
-  
-  x <- paste(day(x), mes, format(x, "%y"))
-  return(x)
-}
-Edad = function(from, to) {
   from_lt = as.POSIXlt(from)
   to_lt = as.POSIXlt(to)
   
@@ -164,10 +171,67 @@ Edad = function(from, to) {
 }
 
 ## Manejo de Datos ----
-TopAbsoluto <- function(data, var_recode, var_top, fun_Top, n=10, 
-                        nom_var, lab_recodificar = "OTROS"){
+TopAbsoluto <- function(data, var_recode, var_top, fun_Top, n=10, nom_var, lab_recodificar = "OTROS"){
+  # Descripción: Recodifica las categorías menos frecuentes de una variable según su valor absoluto o una función de resumen y las agrupa en una nueva categoría.
+  # Parámetros:
+  #   - data: El conjunto de datos en el cual se encuentra la variable a recodificar.
+  #   - var_recode: El nombre de la variable que se desea recodificar.
+  #   - var_top: El nombre de la variable a partir de la cual se calcularán las frecuencias o la función de resumen.
+  #   - fun_Top: La función de resumen a aplicar en caso de no utilizar las frecuencias absolutas (por ejemplo, "mean", "sum", etc.).
+  #   - n: (Opcional) El número máximo de categorías principales a conservar (predeterminado: 10).
+  #   - nom_var: El nombre para la nueva variable recodificada.
+  #   - lab_recodificar: (Opcional) El nombre o etiqueta para las categorías recodificadas (predeterminado: "OTROS").
+  # Valor de retorno:
+  #   - El conjunto de datos con la variable recodificada según las categorías principales y las categorías recodificadas.
+  
+  require(rlang)
+  require(forcats)
   datos = data
   
+  if (fun_Top == "n"){
+    aux1 <- datos %>% 
+      mutate(Tot = n()) %>% 
+      group_by_at(var_recode) %>% 
+      summarise(Var= n(),
+                Pct = Var/unique(Tot))
+  } 
+  else{
+    aux1 <- datos %>% 
+      mutate(Tot= !!parse_expr(paste(fun_Top, "(", var_top,", na.rm = T)"))) %>% 
+      group_by_at(var_recode) %>% 
+      summarise(Var= !!parse_expr(paste0(fun_Top, "(", var_top,", na.rm = T)")),
+                Pct = Var/unique(Tot))
+  }
+
+  aux2 <- aux1 %>%
+    arrange(desc(Var)) %>%
+    mutate(Seq = row_number(),
+           !!nom_var := !!parse_expr(paste0("ifelse(Seq<=n, as.character(",
+                                            var_recode, "), '",
+                                            lab_recodificar, "'", ")"))) %>%
+    select(all_of(var_recode), all_of(nom_var))
+
+  data <- datos %>%
+    left_join(aux2, by = var_recode) %>% 
+    mutate(!!nom_var := !!parse_expr(paste0("factor(", nom_var, ", levels = unique(aux2$",nom_var ,"), ordered = T)")),
+           !!nom_var := !!parse_expr(paste0("fct_relevel(", nom_var,", 'OTROS', after = Inf)"))
+           )
+  return(data)
+}
+TopRelativo <- function(data, var_recode, var_top, fun_Top, pct_min=0.05, nom_var, lab_recodificar = "OTROS"){
+  # Descripción: Recodifica las categorías menos frecuentes de una variable según su valor relativo o una función de resumen y las agrupa en una nueva categoría.
+  # Parámetros:
+  #   - data: El conjunto de datos en el cual se encuentra la variable a recodificar.
+  #   - var_recode: El nombre de la variable que se desea recodificar.
+  #   - var_top: El nombre de la variable a partir de la cual se calcularán las frecuencias o la función de resumen.
+  #   - fun_Top: La función de resumen a aplicar en caso de no utilizar las frecuencias absolutas (por ejemplo, "mean", "sum", etc.).
+  #   - pct_min: (Opcional) El porcentaje mínimo necesario para considerar una categoría principal (predeterminado: 0.05).
+  #   - nom_var: El nombre para la nueva variable recodificada.
+  #   - lab_recodificar: (Opcional) El nombre o etiqueta para las categorías recodificadas (predeterminado: "OTROS").
+  # Valor de retorno:
+  #   - El conjunto de datos con la variable recodificada según las categorías principales y las categorías recodificadas.
+  
+  datos = data
   if (fun_Top == "n"){
     aux1 <- datos %>% 
       mutate(Tot = n()) %>% 
@@ -186,48 +250,19 @@ TopAbsoluto <- function(data, var_recode, var_top, fun_Top, n=10,
   aux2 <- aux1 %>% 
     arrange(desc(Var)) %>% 
     mutate(Seq = row_number(),
-           !!nom_var := !!parse_expr(paste0("ifelse(Seq<=n, ", 
-                                            var_recode, ", '", 
+           !!nom_var := !!parse_expr(paste0("ifelse(Pct>pct_min, as.character(", 
+                                            var_recode, "), '", 
                                             lab_recodificar, "'", ")"))) %>% 
     select(all_of(var_recode), all_of(nom_var))
   
   data <- datos %>%
-    left_join(aux2, by = var_recode)
+    left_join(aux2, by = var_recode) %>%
+    mutate(!!nom_var := !!parse_expr(paste0("factor(", nom_var, ", levels = unique(aux2$",nom_var ,"), ordered = T)")),
+           !!nom_var := !!parse_expr(paste0("fct_relevel(", nom_var,", 'OTROS', after = Inf)"))
+           )
   return(data)
 }
-TopRelativo <- function(data, var_recode, var_top, fun_Top, pct_min=0.05, 
-                        nom_var, lab_recodificar = "OTROS"){
-  datos = data
-  
-  if (fun_Top == "n"){
-    aux1 <- datos %>% 
-      mutate(Tot = n()) %>% 
-      group_by_at(var_recode) %>% 
-      summarise(Var= n(),
-                Pct = Var/unique(Tot))
-  } 
-  else{
-    aux1 <- datos %>% 
-      mutate(Tot= !!parse_expr(paste(fun_Top, "(", var_top,", na.rm = T)"))) %>% 
-      group_by_at(var_recode) %>% 
-      summarise(Var= !!parse_expr(paste0(fun_Top, "(", var_top,", na.rm = T)")),
-                Pct = Var/unique(Tot))
-  }
-  
-  aux2 <- aux1 %>% 
-    arrange(desc(Var)) %>% 
-    mutate(Seq = row_number(),
-           !!nom_var := !!parse_expr(paste0("ifelse(Pct>pct_min, ", 
-                                            var_recode, ", '", 
-                                            lab_recodificar, "'", ")"))) %>% 
-    select(all_of(var_recode), all_of(nom_var))
-  
-  nivs <- c(aux2[,1], aux2[,2]) %>% unlist() %>% unique()
-  
-  data <- datos %>%
-    left_join(aux2, by = var_recode) 
-  return(data)
-}
+
 
 ## Graficos ----
 vline <- function(x = 0, color = "red") {
