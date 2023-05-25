@@ -1,16 +1,10 @@
 # Funciones ----
 
 ## Paquetes ----
-Loadpkg <- function(pkg) {
-# Descripción: Carga los paquetes especificados en el entorno de trabajo.
-# Parámetros:
-#   - pkg: Un vector de caracteres que contiene los nombres de los paquetes que se desean cargar.
-# Valor de retorno:
-#   - Ninguno.
-
+Loadpkg <- function(pkg){
   new.pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
   if (length(new.pkg)) 
-    install.packages(new.pkg, dependencies = TRUE)
+    install.packages(new.pkg, dependencies = T)
   sapply(pkg, require, character.only = TRUE)
 }
 
@@ -263,9 +257,15 @@ TopRelativo <- function(data, var_recode, var_top, fun_Top, pct_min=0.05, nom_va
   return(data)
 }
 
-
 ## Graficos ----
 vline <- function(x = 0, color = "red") {
+  # Descripción: Crea una representación de una línea vertical en un gráfico.
+  # Parámetros:
+  #   - x: La posición en el eje x donde se desea trazar la línea vertical (por defecto: 0).
+  #   - color: El color de la línea (por defecto: "red").
+  # Valor de retorno:
+  #   - Una lista con las propiedades necesarias para dibujar la línea vertical en un gráfico.
+  
   list(
     type = "line", 
     y0 = 0, 
@@ -277,6 +277,13 @@ vline <- function(x = 0, color = "red") {
   )
 }
 hline <- function(y = 0, color = "#ff3a21") {
+  # Descripción: Crea una representación de una línea horizontal en un gráfico.
+  # Parámetros:
+  #   - y: La posición en el eje y donde se desea trazar la línea horizontal (por defecto: 0).
+  #   - color: El color de la línea (por defecto: "#ff3a21").
+  # Valor de retorno:
+  #   - Una lista con las propiedades necesarias para dibujar la línea horizontal en un gráfico.
+  
   list(
     type = "line", 
     x0 = 0, 
@@ -310,13 +317,15 @@ ColoresPlots2 <- function(value){
 }
 
 ## Formatos ----
-Negrita <- function(x, color="#55595c"){
-  # Pone un texto dado en negritas en codigo HTML
-  paste0("<strong><span style='color: ",color,"';>", x, "</span></strong>") %>% HTML
-  
-}
+
 DefinirFormato <- function(formato){
-  # Define el formato para un numero segun su tipo: coma, numero, dinero, porcentaje
+  require(scales)
+  # Descripción: Define una función de  formato específico para los números.
+  # Parámetros:
+  #   - formato: El formato deseado para los números ("coma", "numero", "dinero", "miles" o "porcentaje").
+  # Valor de retorno:
+  #   - El objeto que define el formato para los números.
+  
   formato <- if(formato == "coma"){
     label_number(accuracy = 1,scale = 1,suffix = "",prefix = "", big.mark = ",")
   } else if(formato == "numero"){
@@ -326,39 +335,35 @@ DefinirFormato <- function(formato){
   } else if(formato == "miles"){
     label_number(accuracy = 1,scale = 1/1000, suffix = "",prefix = "$", big.mark = ",")
   }else if(formato == "porcentaje"){
-    label_number(accuracy = 0.1,scale = 100, suffix = "%",prefix = "", big.mark = ",")
+    label_number(accuracy = 0.01,scale = 100, suffix = "%",prefix = "", big.mark = ",")
   }
   return(formato)
+}
+FormatoD3 <- function(formato){
+  # Descripción: Define el formato de visualización de números en una gráfica utilizando la biblioteca D3.js.
+  # Parámetros:
+  #   - formato: El formato deseado para visualizar los números en la gráfica ("coma", "numero", "dinero" o "porcentaje").
+  # Valor de retorno:
+  #   - El formato correspondiente para visualizar los números en la gráfica utilizando D3.js.
   
-}
-Formatod3 <- function(formato){
-  # Define el formato para un numero segun su tipo: coma, numero, dinero, porcentaje
   formato <- if(formato == "coma"){
-    ","
+    ",.0f"
   } else if(formato == "numero"){
-    ",.3"
+    ",.2f"
   } else if(formato == "dinero"){
-    "$,"
+    "$,.0f"
   } else if(formato == "porcentaje"){
-    ",.0%"
+    ",.2%"
   }
   return(formato)
 }
-FormatoHOT <- function(formato){
-  # Define el formato para un numero segun su tipo: coma, numero, dinero, porcentaje
-  formato <- if(formato == "coma"){
-    "0,0"
-  } else if(formato == "numero"){
-    "0,0.00"
-  } else if(formato == "dinero"){
-    "$0,0.00"
-  } else if(formato == "porcentaje"){
-    "%0,0.00"
-  }
-  return(formato)
-}  
 FormatoJS <- function(formato){
-  # Define el formato para un numero segun su tipo: coma, numero, dinero, porcentaje
+  # Descripción: Define el formato de visualización de números en JavaScript.
+  # Parámetros:
+  #   - formato: El formato deseado para visualizar los números ("coma", "numero", "dinero" o "porcentaje").
+  # Valor de retorno:
+  #   - El formato correspondiente en JavaScript para visualizar los números.
+  
   formato <- if(formato == "coma"){
     'function(d){return d.toFixed(0).toString().replace(/\\B(?=(\\d{3})+(?!\\d))/g, ",");}'
   } else if(formato == "numero"){
@@ -371,6 +376,110 @@ FormatoJS <- function(formato){
     "function(d){return (d*100).toFixed(1) + '%'}"
   }
   return(formato)
+}
+FormatoHOT <- function(formato){
+  # Descripción: Define el formato para un número según su tipo: coma, número, dinero, porcentaje, para su uso en Handsontable (HOT).
+  # Parámetros:
+  #   - formato: El tipo de formato deseado. Puede ser "coma", "numero", "dinero" o "porcentaje".
+  # Valor de retorno:
+  #   - Una cadena de texto que representa el formato deseado para el número en Handsontable (HOT).
+  
+  formato <- if(formato == "coma"){
+    "0,0"
+  } else if(formato == "numero"){
+    "0,0.00"
+  } else if(formato == "dinero"){
+    "$0,0.00"
+  } else if(formato == "porcentaje"){
+    "%0,0.00"
+  }
+  return(formato)
+} 
+FormatearNumero <- function(x, formato, negrita = T, color = "#000000", meta=NA, prop=T) {
+  # Descripción: Formatea un número según un formato específico, con opciones para resaltar en negrita y aplicar un color en función de una meta.
+  # Parámetros:
+  #   - x: El número a formatear.
+  #   - formato: El formato deseado para el número ("coma", "numero", "dinero", "miles" o "porcentaje").
+  #   - negrita: Un valor lógico que indica si se debe resaltar el número en negrita (por defecto es TRUE).
+  #   - color: El color en formato hexadecimal para aplicar al número (por defecto es "#000000").
+  #   - meta: Un vector numérico que representa la meta o umbral para aplicar un color diferente (opcional).
+  #   - prop: Un valor lógico que indica si se deben generar colores proporcionales en función de la posición del número con respecto a la meta (por defecto es TRUE).
+  # Valor de retorno:
+  #   - El número formateado con las opciones seleccionadas y el formato especificado.
+  
+  require(RColorBrewer)
+  require(tidyverse)
+  require(shiny)
+  
+  form = DefinirFormato(formato)
+  
+  meta2 = c(-Inf, meta, Inf)
+  pal <- ifelse(prop,
+                colorRampPalette(c("#CB4335", "orange", "#138D75")),
+                colorRampPalette(c("#138D75", "orange", "#CB4335"))
+  )
+  
+  n = length(meta) + 1
+  colors <- pal(n)
+  col <- ifelse(is.null(meta), color, colors[sum(!x < meta2)])
+  
+  res <- ifelse(negrita, 
+                paste0("<span style='font-weight: bold;color:", col,"'>", form(x), "</span>") %>% HTML,
+                paste0("<span style='color:", col,"'>", form(x), "</span>") %>% HTML)
+  
+  return(res)
+}
+FormatearTexto <- function(x, negrita = T, color = "#000000", tamano_pct = 1, alineacion="left", transform="capitalize") {
+  # Descripción: Formatea un texto con opciones para resaltar en negrita, aplicar un color, ajustar el tamaño de fuente, alinear el texto y transformar el texto en mayúsculas o minúsculas.
+  # Parámetros:
+  #   - x: El texto a formatear.
+  #   - negrita: Un valor lógico que indica si se debe resaltar el texto en negrita (por defecto es TRUE).
+  #   - color: El color en formato hexadecimal para aplicar al texto (por defecto es "#000000").
+  #   - tamano_pct: El tamaño de la fuente en porcentaje (por defecto es 1, es decir, tamaño normal).
+  #   - alineacion: La alineación del texto ("left", "center" o "right", por defecto es "left").
+  #   - transform: La transformación del texto ("capitalize", "uppercase" o "lowercase", por defecto es "capitalize").
+  # Valor de retorno:
+  #   - El texto formateado con las opciones seleccionadas.
+  
+  require(shiny)
+  neg <- paste0("font-weight:", ifelse(negrita, "bold", "normal"), ";")
+  col <- paste0("color:", color, ";")
+  tam <- paste0("font-size:", tamano_pct * 100, "%;")
+  ali <- paste0("text-align:", alineacion, ";")
+  tra <- paste0("text-transform:", transform, ";")
+  
+  res <- paste0("<span style='", neg, col, tam, ali, tra, "'>", x, "</span>") %>% HTML
+  return(res)
+}
+col_kpi <- function(x, prop = T){
+  # Descripción: Devuelve el color para un indicador según si es proporcional o no.
+  # Parámetros:
+  #   - x: El valor del indicador.
+  #   - prop: Un valor lógico que indica si el indicador es proporcional (TRUE) o no (FALSE).
+  # Valor de retorno:
+  #   - El color correspondiente al indicador.
+  
+  if(prop){
+    col = case_when(x == 0 ~ "#000000", 
+                    x < 0 ~ "#943126",
+                    x > 0 ~ "#0B5345"
+    )} else {
+      col = case_when(x == 0 ~ "#000000", 
+                      x < 0 ~  "#0B5345",
+                      x > 0 ~  "#943126", 
+      )}
+  return(col)
+}
+chr_kpi <- function(x){
+  # Descripción: Retorna un carácter de crecimiento de un número dado.
+  # Parámetros:
+  #   - x: El número para el cual se desea obtener el carácter de crecimiento.
+  # Valor de retorno:
+  #   - Un carácter que representa el crecimiento del número dado.
+  
+  case_when(x == 0 ~ "▬",
+            x < 0 ~ "▼",
+            x > 0 ~ "▲")
 }
 
 ## Condiciones ----
