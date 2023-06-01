@@ -9,7 +9,7 @@ Loadpkg <- function(pkg){
 }
 
 ## Cadenas de Caracteres ----
-LimpiarCadena <- function(x, rem_espacios = T, rem_numeros=T, rem_caresp =T, rem_acentos = T){
+LimpiarCadena <- function(x, rem_espacios = F, rem_numeros=T, rem_caresp =T, rem_acentos = T){
   # Descripción: Limpia una cadena de texto aplicando diferentes transformaciones.
   # Parámetros:
   #   - x: La cadena de texto a limpiar.
