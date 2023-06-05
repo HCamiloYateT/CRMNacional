@@ -21,10 +21,10 @@ LimpiarCadena <- function(x, rem_espacios = F, rem_numeros=T, rem_caresp =T, rem
   #   - La cadena de texto resultante después de aplicar las transformaciones especificadas.
   
   x <- trimws(str_to_upper(gsub("([\\s])\\1+","\\1", x, perl=T)))
-  x <- ifelse(rem_espacios, gsub("\\s", "",x), x)
-  x <- ifelse(rem_numeros, gsub("\\d", "",x), x)
-  x <- ifelse(rem_caresp, gsub("[^[:alnum:][:space:]]", "",x), x)
-  x <- ifelse(rem_caresp, iconv(x, from = 'UTF-8', to = 'ASCII//TRANSLIT'), x)
+  x <- if(rem_espacios) gsub("\\s", "",x) else x
+  x <- if(rem_numeros) gsub("\\d", "",x) else x
+  x <- if(rem_caresp) gsub("[^[:alnum:][:space:]]", "",x) else x
+  x <- if(rem_caresp) iconv(x, from = 'UTF-8', to = 'ASCII//TRANSLIT') else x
   return(x)
 }
 UnirCadenas <- function(..., sep = " ", collapse = NULL, na.rm = F) {
