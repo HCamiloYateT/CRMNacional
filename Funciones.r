@@ -24,7 +24,7 @@ LimpiarCadena <- function(x, rem_espacios = F, rem_numeros=T, rem_caresp =T, rem
   x <- if(rem_espacios) gsub("\\s", "",x) else x
   x <- if(rem_numeros) gsub("\\d", "",x) else x
   x <- if(rem_caresp) gsub("[^[:alnum:][:space:]]", "",x) else x
-  x <- if(rem_caresp) iconv(x, from = 'UTF-8', to = 'ASCII//TRANSLIT') else x
+  x <- if(rem_acentos) iconv(x, from = 'UTF-8', to = 'ASCII//TRANSLIT') else x
   return(x)
 }
 UnirCadenas <- function(..., sep = " ", collapse = NULL, na.rm = F) {
