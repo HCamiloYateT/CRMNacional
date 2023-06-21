@@ -113,6 +113,7 @@ PrimerDia <- function(x){
   
   require(lubridate)
   x <- lubridate::floor_date(as.Date(x), unit = "month")
+  return(x)
 }
 FechaTexto <- function(x, dia = T, dia_nombre = T, dia_nom_abr = T, mes = T, mes_abr = T, anho = T, anho_abr = T, sep_texto=T){
   # Descripción: Convierte una fecha en formato de texto personalizado.
