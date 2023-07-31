@@ -499,7 +499,6 @@ labelObligatorio <- function(label) {
 }
 
 ## Impresion ----
-### Funciones para el UI ----
 ### Funciones para el server ----
 ImprimirGauge <- function(val, limites, rango, Directo, formato){
   
@@ -572,6 +571,109 @@ ImprimirAnillo <- function(data, var_label, var_medida, funcion = "sum", fun_col
   }
   
 }
+
+ImprimirSerieTiempo <- function(data, fecha, vars, pronostico, IC, colores, formato, titulo, titeje){
+  
+  # data: dataframe con la informacion a graficar
+  # fecha: variable de fecha, ingresar en comillas
+  # vars : columnas a graficar
+  # Pronostico: indicador si se ejecuta o no forecast con prophet
+  # IC: Intervalo de confianza de la esimacion de prophet
+  # colores: vector de colores a graficar,k debe coincidir en tamaño con el numeor de columnas a graficar 
+  # formato: formato del eje y de los textos
+  # titutlo: titulo del gráfico
+  # titeje: titulo del eje Y
+  
+  require(plotly)
+  require(prophet)
+  require(rlang)
+  require(scales)
+  
+  aux1 <- data %>% 
+    mutate(Fecha = !!parse_expr(fecha)) %>% 
+    complete(Fecha = seq.Date(as.Date(min(Fecha)), as.Date(max(Fecha)), by="month")) %>% 
+    mutate_at(vars, list(~ifelse(is.na(.), 0, .))) %>% 
+    select_at(c("Fecha", vars))
+  
+  names(colores) = vars
+  
+  form1 = DefinirFormato(formato)
+  form2 = Formatod3(formato)
+  
+  if(pronostico){
+    
+    lista <- names(aux1)[-1]
+    pron <- do.call("bind_rows", lapply(lista, function(var){
+      
+      aux2 <- aux1 %>%
+        select(ds = Fecha,
+               y = all_of(var))
+      
+      m <- prophet(aux2, interval.width = IC, weekly.seasonality=F, daily.seasonality=F)
+      future <- make_future_dataframe(m, periods = 12, freq = "month", include_history = T)
+      
+      forecast <- predict(m, future) %>%
+        mutate(Source = var) %>%
+        left_join(aux2, by = "ds") %>%
+        mutate(yhat = ifelse(is.na(y), yhat, NA),
+               yhat_lower = ifelse(is.na(y), yhat_lower, NA),
+               yhat_upper = ifelse(is.na(y), yhat_upper, NA)) %>% 
+        select(Fecha = ds, Source, Real = y, LI = yhat_lower, Pronostico = yhat, LS = yhat_upper)
+      
+      return(forecast)
+      
+    }))
+    
+    plot_ly(pron, x=~Fecha) %>% 
+      add_trace(y=~Real, color = ~Source, type = "scatter", mode="lines+markers",
+                marker = list(size = 5), colors=colores,
+                hoverinfo = "text", hoverlabel = list(pron = "left"),
+                hovertext = paste0("<b>", FechaLarga(pron$Fecha), "</b>",
+                                   "<br>", str_to_sentence(pron$Source), ": ", form1(pron$Real))) %>% 
+      add_ribbons(ymin = ~LI, ymax = ~LS, color = ~Source, showlegend = F, alpha = 0.3,
+                  hoverinfo = "text", hoverlabel = list(align = "left"),
+                  hovertext = paste0("<b>", FechaLarga(pron$Fecha), "</b>",
+                                     "<br>", "Límite inferior:  ", form1(pron$LI),
+                                     "<br>", "Estimado:         ", form1(pron$Pronostico),
+                                     "<br>", "Límite superior: ", form1(pron$LS))) %>% 
+      add_lines(y=~Pronostico, color = ~Source, type = "scatter", mode="lines", name="Forecast",
+                hoverinfo = "none", showlegend = F) %>% 
+      layout(title = list(text=titulo, 
+                          font=list(family = "Arial, sans-serif",size = 16,color = "black")),
+             xaxis = list(title = ""),
+             yaxis = list(title=titeje, tickformat = form2, visible=T, rangemode = "tozero",
+                          title=list(text="", font= list(family = "Arial, sans-serif",
+                                                         size = 16,color = "black")), 
+                          tickfont= list(family = "Arial, sans-serif",size = 14,color = "black")),
+             paper_bgcolor='rgba(0,0,0,0)',
+             plot_bgcolor='rgba(0,0,0,0)',
+             legend = list(orientation = 'h', xanchor = "center",  x = 0.5, y = -0.05)) %>% 
+      config(locale = "es",displayModeBar=F)
+  } else {
+    
+    pron <- aux1 %>% 
+      pivot_longer(vars, names_to = "Source", values_to = "Real")
+    
+    plot_ly(pron, x=~Fecha) %>% 
+      add_trace(y=~Real, color = ~Source, type = "scatter", mode="lines+markers",
+                marker = list(size = 5), colors=colores,
+                hoverinfo = "text", hoverlabel = list(pron = "left"),
+                hovertext = paste0("<b>", FechaLarga(pron$Fecha), "</b>",
+                                   "<br>", str_to_sentence(pron$Source), ": ", form1(pron$Real))) %>% 
+      layout(title = list(text=titulo, 
+                          font=list(family = "Arial, sans-serif",size = 16,color = "black")),
+             xaxis = list(title = ""),
+             yaxis = list(title=titeje, tickformat = form2, visible=T, rangemode = "tozero",
+                          title=list(text="", font= list(family = "Arial, sans-serif",
+                                                         size = 16,color = "black")), 
+                          tickfont= list(family = "Arial, sans-serif",size = 14,color = "black")),
+             paper_bgcolor='rgba(0,0,0,0)',
+             plot_bgcolor='rgba(0,0,0,0)',
+             legend = list(orientation = 'h', xanchor = "center",  x = 0.5, y = -0.05)) %>% 
+      config(locale = "es", displayModeBar=F)
+  }
+}
+
 ImprimirSerieDG <- function(data, vars, fecha, formato, titulo, titeje, colores, meta=NULL){
   
   require(xts)
