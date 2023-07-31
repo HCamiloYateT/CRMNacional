@@ -56,7 +56,14 @@ UnirCadenas <- function(..., sep = " ", collapse = NULL, na.rm = F) {
       }
     }
 }
-
+                   
+Saltos <- function(n=1){
+  strrep('<br/>', n)
+}
+Espacios <- function(n=1){
+  strrep('&emsp;', n)
+}
+                   
 ## Números ----
 SiError_0 <- function(x){
   # Descripción: Reemplaza los valores NaN, Inf y -Inf en un vector numérico por 0.
