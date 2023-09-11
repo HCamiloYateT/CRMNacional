@@ -2,26 +2,10 @@
 
 ## Paquetes ----
 Loadpkg <- function(pkg){
-  # Parámetros:
-  #   - pkg: Un vector de caracteres que contiene los nombres de los paquetes a cargar.
-  # Devuelve:
-  #   - TRUE si todos los paquetes se cargan exitosamente, FALSE si no se pueden cargar.
-  # Uso:
-  #   - Esta función se utiliza para asegurarse de que ciertos paquetes de R estén disponibles y cargados en el entorno actual.
-  #   - Si un paquete no está instalado, lo instalará automáticamente antes de cargarlo.
-
-  # Identificar los paquetes que no están instalados
   new.pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
-  
-  # Si hay paquetes no instalados, instálalos con sus dependencias
   if (length(new.pkg)) 
-    install.packages(new.pkg, dependencies = TRUE)
-  
-  # Cargar los paquetes en el entorno actual
-  loaded <- sapply(pkg, require, character.only = TRUE)
-  
-  # Devolver TRUE si todos los paquetes se cargaron exitosamente, FALSE si no
-  return(all(loaded))
+    install.packages(new.pkg, dependencies = T)
+  sapply(pkg, require, character.only = TRUE)
 }
 
 ## Cadenas de Caracteres ----
