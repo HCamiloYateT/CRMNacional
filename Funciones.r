@@ -1,31 +1,5 @@
 # Funciones ----
 
-## Cargar Datos
-CargarDatos <- function(tabla){
-  # Parámetros:
-  #   - tabla: El nombre de la tabla desde la que se cargarán los datos.
-  # Devuelve:
-  #   - Un dataframe con los datos cargados desde la tabla especificada.
-  # Uso:
-  #   - Esta función se utiliza para recuperar datos de una base de datos MySQL y cargarlos en R.
-  
-  # Conectar a la base de datos MySQL
-  con <- dbConnect(RMySQL::MySQL(), dbname = "Analitica", host = "localhost",
-                   port = 3306, user = 'datos', password = 'R4c4f3*1', DBMSencoding = "UTF-8")
-  
-  # Establecer la codificación de caracteres a UTF-8
-  dbGetQuery(con, "SET NAMES 'utf8'") 
-  
-  # Consultar la base de datos y almacenar el resultado en aux1
-  aux1 <- dbGetQuery(con, paste("select *  from", tabla))
-  
-  # Desconectar de la base de datos MySQL
-  dbDisconnect(con)
-  
-  # Devolver los datos cargados como un dataframe
-  return(aux1)
-}
-
 ## Paquetes ----
 Loadpkg <- function(pkg){
   # Parámetros:
