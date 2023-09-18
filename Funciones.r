@@ -9,6 +9,12 @@ Loadpkg <- function(pkg){
 }
 
 ## Cadenas de Caracteres ----
+
+LimpiarNombres <- function(s){
+  x <- trimws(str_to_upper(gsub("([\\s])\\1+","\\1",s, perl=T)))
+  return(x)
+}
+
 LimpiarCadena <- function(x, rem_espacios = F, rem_numeros=T, rem_caresp =T, rem_acentos = T){
   # Descripción: Limpia una cadena de texto aplicando diferentes transformaciones.
   # Parámetros:
