@@ -769,7 +769,7 @@ CajaIco <- function(texto, icono, col_fondo, col_letra = "#17202A", col_icono = 
   s_con <- "position:absolute;z-index:3;margin:0px;padding:5px 10px;margin-top:20px;margin-left:20px;background:transparent;"
   
   # Definición de estilos para el texto
-  s_tex <- paste0("color:", col_letra, ";text-align:left;vertical-align:text-top;font-size:22px;font-weight:bold;")
+  s_tex <- paste0("color:", col_letra, ";text-align:left;vertical-align:text-top;font-size:20px;font-weight:bold;")
   
   # Generación de la caja utilizando las especificaciones de estilo definidas
   column(4,
@@ -809,7 +809,7 @@ CajaIma <- function(texto, imagen, col_fondo, col_letra = "#17202A", col_icono =
   s_con <- "position:absolute;z-index:3;margin:0px;padding:5px 10px;margin-top:20px;margin-left:20px;background:transparent;"
   
   # Definición de estilos para el texto
-  s_tex <- paste0("color:", col_letra, ";text-align:left;vertical-align:text-top;font-size:22px;font-weight:bold;")
+  s_tex <- paste0("color:", col_letra, ";text-align:left;vertical-align:text-top;font-size:20px;font-weight:bold;")
   
   # Generación de la caja utilizando las especificaciones de estilo definidas
   column(4,
