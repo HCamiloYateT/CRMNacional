@@ -741,3 +741,85 @@ ImprimirProphet <- function(data, var, fecha, IC = 0.8, formato, titeje){
     dyRangeSelector(height = 50, strokeColor = "")
 }
 
+#' CajaIco - Genera una caja con un ícono y texto en un entorno de Shiny
+#'
+#' Esta función genera una caja con un ícono y texto en un entorno de Shiny.
+#'
+#' @param texto El texto que se mostrará en la caja.
+#' @param icono El ícono que se mostrará en la caja.
+#' @param col_fondo El color de fondo de la caja.
+#' @param col_letra (por defecto #17202A) El color del texto.
+#' @param col_icono (por defecto #000000) El color del ícono.
+#' @return Una caja con el ícono y el texto especificados.
+#'
+#' @examples
+#' CajaIco("Ejemplo de caja con ícono", "fas fa-chart-bar", "#3498DB", "#FFFFFF", "#FFFFFF")
+#'
+CajaIco <- function(texto, icono, col_fondo, col_letra = "#17202A", col_icono = "#000000") {
+  # Cargando la librería colorspace
+  require(colorspace)
+  
+  # Definición de estilos para la caja
+  s_caj <- paste0("display:block;background:", col_fondo, ";min-height:120px;width:100%;border-radius:10px;box-shadow:1px 1px 2px", darken(col_fondo, 0.1), ";")
+  
+  # Definición de estilos para el ícono
+  s_ico <- paste0("position:absolute;display:block;float:left;height:100%;width:100%;text-align:left; font-size:80px;color:", adjust_transparency(col_icono, 0.08), ";background:transparent;z-index:1")
+  
+  # Definición de estilos para el contenido
+  s_con <- "position:absolute;z-index:3;margin:0px;padding:5px 10px;margin-top:20px;margin-left:20px;background:transparent;"
+  
+  # Definición de estilos para el texto
+  s_tex <- paste0("color:", col_letra, ";text-align:left;vertical-align:text-top;font-size:16px;font-weight:bold;")
+  
+  # Generación de la caja utilizando las especificaciones de estilo definidas
+  column(4,
+         div(style = s_caj,
+             column(6, style = s_ico, icon(icono)), # Incorporando el ícono a la caja
+             column(6, style = s_con,
+                    tags$span(style = s_tex, texto)) # Incorporando el texto a la caja
+         )
+  )
+}
+
+#' CajaIma - Genera una caja con una imagen y texto en un entorno de Shiny
+#'
+#' Esta función genera una caja con una imagen y texto en un entorno de Shiny.
+#'
+#' @param texto El texto que se mostrará en la caja.
+#' @param imagen La ruta de la imagen que se mostrará en la caja.
+#' @param col_fondo El color de fondo de la caja.
+#' @param col_letra (por defecto #17202A) El color del texto.
+#' @param col_icono (por defecto #000000) El color de la imagen.
+#' @return Una caja con la imagen y el texto especificados.
+#'
+#' @examples
+#' CajaIma("Ejemplo de caja con imagen", "ruta_de_la_imagen.jpg", "#3498DB", "#FFFFFF", "#FFFFFF")
+#'
+CajaIma <- function(texto, imagen, col_fondo, col_letra = "#17202A", col_icono = "#000000") {
+  # Cargando la librería colorspace
+  require(colorspace)
+  
+  # Definición de estilos para la caja
+  s_caj <- paste0("display:block;background:", col_fondo, ";min-height:120px;width:100%;border-radius:10px;box-shadow:1px 1px 2px", darken(col_fondo, 0.1), ";")
+  
+  # Definición de estilos para la imagen
+  s_ima <- "position:absolute;display:block;z-index:1;opacity: 0.15;"
+  
+  # Definición de estilos para el contenido
+  s_con <- "position:absolute;z-index:3;margin:0px;padding:5px 10px;margin-top:20px;margin-left:20px;background:transparent;"
+  
+  # Definición de estilos para el texto
+  s_tex <- paste0("color:", col_letra, ";text-align:left;vertical-align:text-top;font-size:16px;font-weight:bold;")
+  
+  # Generación de la caja utilizando las especificaciones de estilo definidas
+  column(4,
+         div(style = s_caj,
+             column(6, style = s_ima, 
+                    HTML(paste("<img src=", imagen, "alt='Imagen'>"))
+             ),
+             column(6, style = s_con,
+                    tags$span(style = s_tex, texto)
+             )
+         )
+  )
+}
