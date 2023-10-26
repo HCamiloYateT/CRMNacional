@@ -443,7 +443,7 @@ FormatearNumero <- function(x, formato, negrita = T, color = "#000000", meta=NA,
   
   return(res)
 }
-FormatearTexto <- function(x, negrita = T, color = "#000000", tamano_pct = 1, alineacion="left", transform="capitalize") {
+FormatearTexto <- function(x, negrita = T, color = "#000000", tamano_pct = 1, alineacion="left", transform="none") {
   # Descripción: Formatea un texto con opciones para resaltar en negrita, aplicar un color, ajustar el tamaño de fuente, alinear el texto y transformar el texto en mayúsculas o minúsculas.
   # Parámetros:
   #   - x: El texto a formatear.
@@ -451,7 +451,7 @@ FormatearTexto <- function(x, negrita = T, color = "#000000", tamano_pct = 1, al
   #   - color: El color en formato hexadecimal para aplicar al texto (por defecto es "#000000").
   #   - tamano_pct: El tamaño de la fuente en porcentaje (por defecto es 1, es decir, tamaño normal).
   #   - alineacion: La alineación del texto ("left", "center" o "right", por defecto es "left").
-  #   - transform: La transformación del texto ("capitalize", "uppercase" o "lowercase", por defecto es "capitalize").
+  #   - transform: La transformación del texto ("none","capitalize", "uppercase" o "lowercase", por defecto es "capitalize").
   # Valor de retorno:
   #   - El texto formateado con las opciones seleccionadas.
   
