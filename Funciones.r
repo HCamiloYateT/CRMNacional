@@ -760,7 +760,7 @@ CajaIco <- function(texto, icono, col_fondo, col_letra = "#17202A", col_icono = 
   require(colorspace)
   
   # Definición de estilos para la caja
-  s_caj <- paste0("display:block;background:", col_fondo, ";min-height:120px;width:100%;border-radius:10px;box-shadow:1px 1px 2px", darken(col_fondo, 0.1), ";")
+  s_caj <- paste0("display:block;background:", col_fondo, ";min-height:120px;height: fit-content;width:100%;border-radius:10px;box-shadow:1px 1px 2px", darken(col_fondo, 0.1), ";")
   
   # Definición de estilos para el ícono
   s_ico <- paste0("position:absolute;display:block;float:left;height:100%;width:100%;text-align:left; font-size:80px;color:", adjust_transparency(col_icono, 0.05), ";background:transparent;z-index:1")
