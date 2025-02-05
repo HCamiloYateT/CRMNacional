@@ -1,0 +1,109 @@
+body {
+  font-family: 'Roboto';
+}
+.box-title {
+    font-family: 'Source Serif Pro';
+}
+.h1, .h2, .h3, .h4, .h5, .h6, h1, h2, h3, h4, h5, h6 {
+    font-family: 'Source Serif Pro';
+}
+
+.bg-aqua {
+  background-color: #FDFEFE!important; 
+}
+
+.info-box{
+  border:1px solid #F8F9F9;
+  border-radius: 10px;
+}
+
+.info-box-icon {
+  background-color: transparent;
+  color: #17202A;
+  text-shadow: 1px 1px 1px #ccc;
+  border-radius: 10px;
+  height: 100%;
+}
+
+.info-box-text {
+  color: #17202A;
+}
+
+.shiny-output-error { 
+  visibility: hidden; 
+  
+}
+
+.shiny-output-error:before { 
+  visibility: hidden; 
+  
+}
+
+.modal-dialog {
+    max-width: 90%;
+}
+
+.TasasMoviles{
+  text-align: center;
+  font-size: 150%;
+}
+
+[type="search"] {
+   height: 10px !important;
+   placehol
+}
+
+.copyButton {
+  background-color: #99A3A4; 
+  border-radius: 8px;  
+  border-style: none;  
+  box-sizing: border-box; 
+  border: 2px solid white;
+  color: #000000; 
+  cursor: pointer; 
+  display: inline-block;
+  padding:1px;
+  height: 40px; 
+  font-size: 14px;
+}
+
+.copyButton:hover, .copyButton:focus {
+  background-color: #000000;
+  color: #FFFFFF;
+}
+
+.table th{
+  background-color:#2d2926;
+  color:#fffdfc;
+  font-size: 14px;
+  padding: 1px;
+  border-spacing: 1px;
+  border: 1px solid #ffffff;
+  text-align: center;
+}        
+
+.table td{
+  font-size: 12px;
+  padding: 0px;
+  border-spacing: 0px;
+  border: 1px solid #ffffff;
+}
+
+.table tr.even{
+    background-color:#e2dbd7;
+}
+.table tr.odd{
+    background-color:#ffffff;
+    
+}
+
+.table-hover th{
+  background-color:#000000;
+  color:#ffffff;
+  font-size: 14px;
+  padding: 1px;
+  border-spacing: 1px;
+  border: 1px solid #ffffff;
+  text-align: center;
+}
+       
