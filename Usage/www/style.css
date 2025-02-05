@@ -1,0 +1,196 @@
+.shiny-output-error { 
+  visibility: hidden; 
+  
+}
+
+.shiny-output-error:before { 
+  visibility: hidden; 
+  
+}
+
+body {
+  font-family: 'Roboto';
+}
+.box-title {
+    font-family: 'Source Serif Pro';
+}
+.h1, .h2, .h3, .h4, .h5, .h6, h1, h2, h3, h4, h5, h6 {
+    font-family: 'Source Serif Pro';
+}
+
+.bg-aqua {
+  background-color: #FDFEFE!important; 
+}
+
+.info-box{
+  border:1px solid #F8F9F9;
+  border-radius: 10px;
+}
+
+.info-box-icon {
+  background-color: transparent;
+  color: #17202A;
+  text-shadow: 1px 1px 1px #ccc;
+  border-radius: 10px;
+  height: 100%;
+}
+
+.info-box-text {
+  color: #17202A;
+}
+
+.modal-dialog {
+    max-width: 98%;
+}
+
+.TasasMoviles{
+  text-align: center;
+  font-size: 150%;
+}
+
+[type="search"] {
+   height: 10px !important;
+   placehol
+}
+
+.copyButton {
+  appearance: none;
+  background-color: #FAFBFC;
+  border: 1px solid rgba(27, 31, 35, 0.15);
+  border-radius: 6px;
+  box-shadow: rgba(27, 31, 35, 0.04) 0 1px 0, rgba(255, 255, 255, 0.25) 0 1px 0 inset;
+  box-sizing: border-box;
+  color: #24292E;
+  cursor: pointer;
+  display: inline-block;
+  font-family: -apple-system, system-ui, "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+  list-style: none;
+  padding: 6px 16px;
+  position: relative;
+  transition: background-color 0.2s cubic-bezier(0.3, 0, 0.5, 1);
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+  vertical-align: middle;
+  white-space: nowrap;
+  word-wrap: break-word;
+}
+
+.copyButton:hover {
+  background-color: #F3F4F6;
+  text-decoration: none;
+  transition-duration: 0.1s;
+}
+
+.copyButton:disabled {
+  background-color: #FAFBFC;
+  border-color: rgba(27, 31, 35, 0.15);
+  color: #959DA5;
+  cursor: default;
+}
+
+.copyButton:active {
+  background-color: #EDEFF2;
+  box-shadow: rgba(225, 228, 232, 0.2) 0 1px 0 inset;
+  transition: none 0s;
+}
+
+.copyButton:focus {
+  outline: 1px transparent;
+}
+
+.copyButton:before {
+  display: none;
+}
+
+.copyButton:-webkit-details-marker {
+  display: none;
+}
+
+.table th{
+  background-color:#2d2926;
+  color:#fffdfc;
+  font-size: 14px;
+  padding: 1px;
+  border-spacing: 1px;
+  border: 1px solid #ffffff;
+  text-align: center;
+}        
+
+.table td{
+  font-size: 12px;
+  padding: 0px;
+  border-spacing: 0px;
+  border: 1px solid #ffffff;
+}
+
+.table tr.even{
+    background-color:#e2dbd7;
+}
+.table tr.odd{
+    background-color:#ffffff;
+    
+}
+
+.table-hover th{
+  background-color:#000000;
+  color:#ffffff;
+  font-size: 14px;
+  padding: 1px;
+  border-spacing: 1px;
+  border: 1px solid #000000;
+  text-align: center;
+}
+
+.dt-buttons{
+  margin: 10px 1px 1px 1px;
+  
+}
+
+table.dataTable tr.selected td, table.dataTable td.selected {
+  background-color: rgba(255,255,255,0) !important;
+}
+
+.accordion-item {
+  border-left: none;
+  border-right: none;
+  border-bottom: solid 1px #D5D8DC;
+  border-top: solid 3px #FF0000;
+}
+
+.accordion-title{
+  font-size: 1.25rem;
+  text-transform: uppercase;
+  letter-spacing: 3px;
+  margin-top: 0;
+  margin-bottom: .5rem;
+  font-weight: 600;
+  line-height: 1.2;
+  font-family: 'Source Serif Pro';
+}
+
+.accordion-button:not(.collapsed) {
+  background-color: transparent; !important;
+}
+
+.accordion-button:link, .accordion-button:visited, .accordion-button:hover, .accordion-button:active  {
+  background-color: #FF0000 !important;
+  color:#FFF !important;
+  text-decoration: none !important;
+  border: hidden !important;
+  border-color: #FFF !important;
+  box-shadow: 0px !important;
+}
+
+.accordion-button:focus {
+  z-index: 3;
+  border-left: none;
+  border-right: none;
+  border-bottom: solid 1px #D5D8DC;
+  border-top: solid 3px #FF0000;
+  outline: 0;
+  box-shadow: 0 0 0 .25rem #FFF !important;
+}
