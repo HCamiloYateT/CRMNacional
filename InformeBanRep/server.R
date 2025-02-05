@@ -3,14 +3,7 @@ function(input, output, session) {
   ## Maker ----
   data_f <- reactive({
     
-    conn_cafe <- dbConnect(odbc::odbc(),
-                           Driver = "ODBC Driver 18 for SQL Server",
-                           Server = "172.16.19.21",
-                           Database = "ContabRacafe",
-                           uid = "AppQlikRcaLee",
-                           pwd = "Rac@CafQlikS2022*",
-                           port = 1433,
-                           TrustServerCertificate="yes")
+    conn_cafe 
     
     venc <- dbGetQuery(conn_cafe, "select AnoBol, MesBolCod, MesBolLTD from NMEANB1")
     corr <-  dbGetQuery(conn_cafe, "select TipCFCod, TipCFNom from EXPCTAFU") %>% 
