@@ -1,0 +1,60 @@
+.bg-aqua {
+  background-color: #707B7C!important; 
+  
+}
+
+.bg-teal {
+  background-color: #121110!important; 
+  
+}
+
+.shiny-output-error { 
+  visibility: hidden; 
+  
+}
+
+.shiny-output-error:before { 
+  visibility: hidden; 
+  
+}
+
+[type="search"] {
+   height: 10px !important;
+   placehol
+}
+
+.copyButton {
+  background-color: #99A3A4; 
+  border-radius: 8px;  
+  border-style: none;  
+  box-sizing: border-box; 
+  border: 2px solid white;
+  color: #000000; 
+  cursor: pointer; 
+  display: inline-block;
+  padding:1px;
+  height: 40px; 
+  font-size: 14px;
+}
+
+.copyButton:hover, .copyButton:focus {
+  background-color: #000000;
+  color: #FFFFFF;
+  
+}
+
+.handsontable th{
+    background-color:#da291c;
+    color:#fffdfc;
+    font-weight:bold;
+    border-bottom: 2px solid #000;
+}
+
+.handsontable td{
+    padding: 0px;
+    border-style:none;
+}
+
+.handsontable .htAutocompleteArrow {
+display: none;
+}
