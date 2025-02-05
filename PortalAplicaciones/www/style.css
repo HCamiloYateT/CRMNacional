@@ -1,0 +1,38 @@
+.glyphicon {
+  font-size: 24px;
+}
+
+.btn-custom-class {
+  position: absolute;
+  top:50%;
+  border: none;
+  color: #808B96;
+  background-color:#FBFCFC ;
+  padding: 0px 0px;
+  border-radius: 4px;
+  transition-duration: 0.4s;
+}
+
+.img_board {
+  opacity: 1;
+}
+
+.img_board:hover {
+  opacity: 0.5;
+}
+
+.badge {
+        display: inline-block;
+        padding: 0.35em 0.65em;
+        font-size: 90%;
+        font-weight: 600;
+        color: white;
+        text-align: center;
+        border-radius: 0.25rem;
+      }
+      .badge-pill {
+        border-radius: 10rem;
+      }
+      .badge-info {
+        background-color: #17a2b8; /* Color azul claro */
+      }
