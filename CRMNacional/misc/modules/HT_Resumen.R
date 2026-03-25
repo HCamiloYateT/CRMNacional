@@ -2,20 +2,46 @@
 
 ResumenTotalUI <- function(id) {
   ns <- NS(id)
+  
+  # Helper: titulo de seccion con separador visual
+  .seccion <- function(titulo, icono) {
+    tags$div(
+      style = paste0(
+        "display:flex; align-items:center; gap:8px; ",
+        "margin:18px 0 6px 0; padding-bottom:6px; ",
+        "border-bottom:2px solid #E2E8F0;"
+      ),
+      tags$span(
+        style = "color:#64748B; font-size:13px;",
+        icon(icono)
+      ),
+      tags$span(
+        titulo,
+        style = paste0(
+          "font-size:13px; font-weight:700; ",
+          "color:#374151; letter-spacing:0.03em; text-transform:uppercase;"
+        )
+      )
+    )
+  }
+  
   tagList(
-    # Fila presupuesto: cumplimiento acumulado sacos y margen
+    # Seccion presupuesto
+    .seccion("Presupuesto", "file-invoice-dollar"),
     fluidRow(
       column(3, CajaModalUI(ns("kpi_cumpl_sacos"))),
       column(3, CajaModalUI(ns("kpi_cumpl_margen")))
     ),
-    # Fila UC: activas, a recuperar, recuperadas, nuevas
+    # Seccion unidades comerciales
+    .seccion("Unidades Comerciales", "users"),
     fluidRow(
       column(3, CajaModalUI(ns("kpi_activas"))),
       column(3, CajaModalUI(ns("kpi_recuperar"))),
       column(3, CajaModalUI(ns("kpi_recuperadas"))),
       column(3, CajaModalUI(ns("kpi_nuevas")))
     ),
-    # Fila comercial: leads, oportunidades, cohorte, competencia
+    # Seccion actividad comercial
+    .seccion("Actividad Comercial", "bullseye"),
     fluidRow(
       column(3, CajaModalUI(ns("kpi_leads"))),
       column(3, CajaModalUI(ns("kpi_oportunidades"))),
@@ -24,7 +50,7 @@ ResumenTotalUI <- function(id) {
     )
   )
 }
-ResumenTotal <- function(id, dat, dat_c, dat_leads, dat_oportunidades, dat_competencia,
+ResumenTotal <- function(id, dat, dat_t, dat_c, dat_leads, dat_oportunidades, dat_competencia,
                          usr, trigger_update) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
@@ -163,7 +189,8 @@ ResumenTotal <- function(id, dat, dat_c, dat_leads, dat_oportunidades, dat_compe
         )
     })
     
-    # Presupuesto YTD: ultimo proceso del anio por cliente/linea cruzado con dat(), acumulado al mes
+    # Presupuesto YTD: ultimo proceso del anio por cliente/linea cruzado con dat_t(), acumulado al mes
+    # dat_t() = data_t sin filtro de fecha — universo dimensional correcto para presupuesto
     ppto_ytd_r <- reactive({
       mes <- month(Sys.Date())
       CargarDatos("CRMNALCLIENTE") %>%
@@ -172,7 +199,7 @@ ResumenTotal <- function(id, dat, dat_c, dat_leads, dat_oportunidades, dat_compe
         filter(FecProceso == max(FecProceso)) %>%
         ungroup() %>%
         inner_join(
-          dat() %>% select(LinNegCod, Segmento, Asesor, Responsable) %>% distinct(),
+          dat_t() %>% select(LinNegCod, Segmento, Asesor, Responsable) %>% distinct(),
           by = join_by(LinNegCod, Segmento, Asesor, Responsable)
         ) %>%
         summarise(
@@ -212,7 +239,7 @@ ResumenTotal <- function(id, dat, dat_c, dat_leads, dat_oportunidades, dat_compe
     DashboardOportunidades(  id = "detalle_oportunidades",  dat_oportunidades, usr)
     Cohortes(                id = "detalle_cohortes",       data_tx = dat_c)
     DetalleCompetencia(      id = "detalle_competencia")
-    Presupuesto(             id = "detalle_presupuesto",    dat)
+    Presupuesto(             id = "detalle_presupuesto",    dat_t)
     
     # Cajas KPI presupuesto ----
     CajaModal("kpi_cumpl_sacos",
@@ -268,7 +295,7 @@ ResumenTotal <- function(id, dat, dat_c, dat_leads, dat_oportunidades, dat_compe
               contenido_modal = function() DetalleClienteUI(ns("detalle_activas")),
               footer = reactive(paste0(
                 "Clientes con compras regulares clasificados como activos ",
-                "segun la segmentacion del ", format(corte_mes(), "%d/%m/%Y"), "."
+                "seg\u00fan la segmentaci\u00f3n del ", format(corte_mes(), "%d/%m/%Y"), "."
               )),
               footer_class = "caja-modal-footer"
     )
@@ -284,8 +311,8 @@ ResumenTotal <- function(id, dat, dat_c, dat_leads, dat_oportunidades, dat_compe
               icono_modal   = "user-clock",
               contenido_modal = function() DetalleClienteRecuperarUI(ns("detalle_recuperar")),
               footer = reactive(paste0(
-                "Clientes que han dejado de comprar y requieren gestion comercial ",
-                "segun la segmentacion del ", format(corte_mes(), "%d/%m/%Y"), "."
+                "Clientes que han dejado de comprar y requieren gesti\u00f3n comercial ",
+                "seg\u00fan la segmentaci\u00f3n del ", format(corte_mes(), "%d/%m/%Y"), "."
               )),
               footer_class = "caja-modal-footer"
     )
@@ -302,7 +329,7 @@ ResumenTotal <- function(id, dat, dat_c, dat_leads, dat_oportunidades, dat_compe
               contenido_modal = function() DetalleClienteRecuperadoUI(ns("detalle_recuperadas")),
               footer = reactive(paste0(
                 "Clientes que estaban por recuperar y ya realizaron una compra en ",
-                .mes_es(Sys.Date()), ". Quedaran activos en la proxima segmentacion."
+                .mes_es(Sys.Date()), ". Quedar\u00e1n activos en la pr\u00f3xima segmentaci\u00f3n."
               )),
               footer_class = "caja-modal-footer"
     )
@@ -319,7 +346,7 @@ ResumenTotal <- function(id, dat, dat_c, dat_leads, dat_oportunidades, dat_compe
               contenido_modal = function() DetalleClienteNuevoUI(ns("detalle_nuevas")),
               footer = reactive(paste0(
                 "Clientes que compraron por primera vez en ", .mes_es(Sys.Date()),
-                " sin ningun registro previo en el historial comercial de Racafe."
+                " sin ning\u00fan registro previo en el historial comercial de Racaf\u00e9."
               )),
               footer_class = "caja-modal-footer"
     )
@@ -353,7 +380,7 @@ ResumenTotal <- function(id, dat, dat_c, dat_leads, dat_oportunidades, dat_compe
               icono_modal   = "handshake",
               contenido_modal = function() DashboardOportunidadesUI(ns("detalle_oportunidades")),
               footer = reactive(paste0(
-                "Combinaciones unicas de cliente, linea y producto con oportunidad ",
+                "Combinaciones \u00fanicas de cliente, l\u00ednea y producto con oportunidad ",
                 "de venta registrada en el periodo."
               )),
               footer_class = "caja-modal-footer"
@@ -370,8 +397,8 @@ ResumenTotal <- function(id, dat, dat_c, dat_leads, dat_oportunidades, dat_compe
               icono_modal   = "arrows-to-eye",
               contenido_modal = function() CohortesUI(ns("detalle_cohortes")),
               footer = reactive(paste0(
-                "Clientes presupuestados con facturacion en ", periodo_r(),
-                " incluidos en el analisis de retencion por cohorte."
+                "Clientes presupuestados con facturaci\u00f3n en ", periodo_r(),
+                " incluidos en el an\u00e1lisis de retenci\u00f3n por cohorte."
               )),
               footer_class = "caja-modal-footer"
     )

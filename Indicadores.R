@@ -36,12 +36,33 @@ get_fnc_data <- function() {
 get_system_data <- function(uid, pwd) {
   tryCatch({
     # Consulta para obtener TRM y precio promedio
+    ConsultaSistema("syscafe", "SELECT top 10 *  FROM EXPHOTR2 WHERE HTFec  = (SELECT MAX(HTFec ) FROM EXPHOTRA)")
+    
     cons_main <- ConsultaSistema("syscafe",
                                  "SELECT
                                     (SELECT MedTRM FROM EXPMECAF WHERE MedFec = (SELECT MAX(MedFec) FROM EXPMECAF)) AS TRM"
     )
     
-    # Consulta para obtener precios adicionales
+    # Contrato "C" de Nueva York de café
+    fechai <- as.Date("2025-10-01")
+    
+    NY <- ConsultaSistema("syscafe", 
+                          "WITH Futuros AS (
+                                  SELECT 
+                                      InFuFch AS Fecha,
+                                      DATEFROMPARTS(CAST(AnoBol AS INT), CAST(MesBolCod AS INT), 1) AS Date,
+                                      AVG(InFuCieVr) AS InFuCieVr,
+                                      ROW_NUMBER() OVER (PARTITION BY InFuFch ORDER BY DATEFROMPARTS(CAST(AnoBol AS INT), CAST(MesBolCod AS INT), 1)) AS Posicion
+                                  FROM INFFUT1
+                                  WHERE CiaCod = 10 AND TipCFCod = 'A' AND 
+                                        InFuFch >= (SELECT MAX(InFuFch) FROM INFFUT1 WHERE CiaCod = 10 AND TipCFCod = 'A')
+                                        AND InFuCieVr > 0
+                                  GROUP BY InFuFch, AnoBol, MesBolCod
+                          )
+                          SELECT Fecha, InFuCieVr AS NY
+                          FROM Futuros
+                          WHERE Posicion = 2")
+    
     # Precio de carga
     PC <- ConsultaSistema("syscafe", 
                           "SELECT h2.HTFec,
@@ -89,6 +110,7 @@ get_system_data <- function(uid, pwd) {
     # Combinar resultados
     list(
       trm = cons_main$TRM,
+      ny = NY$NY,
       precio_carga = PrecioCarga$PrecioCarga,
       precios_adicionales = cons_prices,
       precios_compras = compras_arenales
@@ -114,6 +136,7 @@ extraer_indicadores <- function(uid, pwd) {
     TRM = system_data$trm,
     PrecioFNC = fnc_data$precio,
     UGCFNC = (fnc_data$precio/125)/(70/(96.89)),
+    PrecioNY = system_data$ny,
     PrecioCarga = system_data$precio_carga,
     Diferencial = system_data$precios_adicionales$Diferencial,
     UGCRacafe = (system_data$precio_carga/125)/(70/(96.89)),
