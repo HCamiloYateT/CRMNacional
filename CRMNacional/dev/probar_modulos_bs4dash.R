@@ -16,10 +16,10 @@ if (basename(.app_root) != "CRMNacional") {
 }
 
 # Carga utilidades y todos los módulos
-source("misc/functions.R")
-source("misc/values.R")
-source("misc/filters.R")
-module_files <- list.files("misc/modules", pattern = "\\.R$", full.names = TRUE)
+source("shared/functions.R")
+source("shared/values.R")
+source("shared/filters.R")
+module_files <- list.files("modules", pattern = "\\.R$", full.names = TRUE)
 purrr::walk(sort(module_files), source)
 
 entrada_modulo <- function(key, label, tab, ui_fun, server_fun = NULL, id = NULL,

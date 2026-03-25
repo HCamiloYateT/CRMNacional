@@ -23,32 +23,35 @@ racafe::Loadpkg(required_packages)
 load("data/data.RData")
 .fecha_min   <- min(data$FecFact, na.rm = TRUE)
 .fecha_max   <- max(data$FecFact, na.rm = TRUE)
-source("misc/functions.R")
-source("misc/values.R")
+source("shared/functions.R")
+source("shared/values.R")
 .app_choices <- Choices()
-source("misc/filters.R")
+source("shared/filters.R")
 
 
 
 
+source("core/services.R")
 load_modules <- function() {
-  path <- "misc"
-  all_files <- list.files(path, pattern = "\\.R$", recursive = TRUE, full.names = TRUE)
-  
-  helpers <- all_files[basename(all_files) %in% c("functions.R", "filters.R", "values.R")]
-  
-  modules <- all_files[grepl("/modules/", all_files)]
-  
-  pres <- modules[grepl("modules/Presupuesto\\.R$", modules)]
-  botones <- modules[grepl("modules/GTBotones\\.R$", modules)]
+  module_dirs <- c("modules", "misc/modules")
+  ui_dirs <- c("ui", "misc/ui")
+
+  modules <- unlist(lapply(module_dirs, function(path) {
+    if (!dir.exists(path)) return(character(0))
+    list.files(path, pattern = "\\.R$", full.names = TRUE)
+  }))
+
+  ui_components <- unlist(lapply(ui_dirs, function(path) {
+    if (!dir.exists(path)) return(character(0))
+    list.files(path, pattern = "\\.R$", full.names = TRUE)
+  }))
+
+  pres <- modules[grepl("/Presupuesto\\.R$", modules)]
+  botones <- modules[grepl("/GTBotones\\.R$", modules)]
   modules_rest <- setdiff(modules, c(pres, botones))
-  
-  modules <- c(botones, pres, sort(modules_rest))
-  
-  ui <- all_files[grepl("/ui/", all_files)]
-  
-  ordered <- c(helpers, modules, ui)
-  
+
+  ordered <- c(botones, pres, sort(modules_rest), sort(ui_components))
+
   message("Cargando archivos en orden:")
   purrr::walk(ordered, ~ message(" - ", .x))
   purrr::walk(ordered, ~ sys.source(.x, envir = globalenv()))

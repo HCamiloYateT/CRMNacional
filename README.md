@@ -7,12 +7,15 @@ Repositorio con una aplicación **Shiny (bs4Dash)** para gestión comercial de c
 ### 1) Aplicación Shiny
 La app vive en `CRMNacional/` y sigue la estructura clásica de Shiny:
 
-- `CRMNacional/global.R`: configuración global, carga de paquetes, carga inicial de datos y de módulos auxiliares.
+- `CRMNacional/app.R`: entrada consolidada (`shinyApp(ui, server)`).
+- `CRMNacional/global.R`: configuración global, carga de paquetes, datos, servicios y módulos auxiliares.
 - `CRMNacional/ui.R`: definición de la interfaz principal (`bs4DashPage`).
-- `CRMNacional/server.R`: lógica de servidor, cachés reactivas, integración de datos y módulos.
-- `CRMNacional/misc/modules/`: módulos funcionales de la app (Indicadores, Oportunidades, Leads, RFM, Presupuesto, Cohortes, Pendientes, etc.).
-- `CRMNacional/misc/ui/`: componentes de UI (header, sidebar, body, footer, controlbar, preloader).
-- `CRMNacional/misc/functions.R`, `CRMNacional/misc/filters.R`, `CRMNacional/misc/values.R`: utilidades compartidas.
+- `CRMNacional/server.R`: lógica de servidor, cachés reactivas e integración de módulos.
+- `CRMNacional/modules/`: módulos funcionales de la app (Indicadores, Oportunidades, Leads, RFM, Presupuesto, Cohortes, Pendientes, etc.).
+- `CRMNacional/ui/`: componentes de UI (header, sidebar, body, footer, controlbar, preloader).
+- `CRMNacional/shared/`: utilidades compartidas (`functions.R`, `filters.R`, `values.R`).
+- `CRMNacional/core/services.R`: reglas de negocio y servicios de dominio.
+- `CRMNacional/config/`: carpeta reservada para configuración por ambiente.
 - `CRMNacional/www/style.css`: estilos CSS de la aplicación.
 
 ### 2) Scripts de datos/procesos en la raíz
