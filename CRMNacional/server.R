@@ -565,6 +565,7 @@ server <- function(input, output, session) {
   ResumenTotal(
     id                = "ResumenTotal",
     dat               = data_f,
+    dat_t             = data_t,
     dat_c             = data_c,
     dat_leads         = data_leads_f,
     dat_oportunidades = data_oportunidades_f,

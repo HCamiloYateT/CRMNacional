@@ -8,6 +8,7 @@ TablaDetalleDatUI <- function(id) {
     reactable::reactableOutput(ns("tabla"))
   )
 }
+
 TablaDetalleDat <- function(id, dat) {
   moduleServer(id, function(input, output, session) {
     
@@ -123,17 +124,17 @@ PresupuestoUI <- function(id) {
              )
       )
     ),
-    # Tabla unificada: cumplimiento + proyeccion por dimension
+    # Tabla unificada: cumplimiento + proyeccion por dimension — colapsada por defecto
     fluidRow(
       bs4Dash::bs4Card(
-        title = "Cumplimiento y Proyeccion por Dimension", status = "white",
-        solidHeader = TRUE, width = 12, collapsible = TRUE, collapsed = FALSE,
+        title = "Cumplimiento y Proyección por Dimensión", status = "white",
+        solidHeader = TRUE, width = 12, collapsible = TRUE, collapsed = TRUE,
         fluidRow(
           column(10,
                  racafe::BotonesRadiales(
                    inputId = "dim_breakdown",
                    choices = c(
-                     "Linea de Negocio" = "linneg", "Segmento" = "segmento",
+                     "Línea de Negocio" = "linneg", "Segmento" = "segmento",
                      "Asesor" = "asesor", "Departamento" = "departamento",
                      "Municipio" = "municipio", "Unidad Comercial" = "unidadcomercial"
                    ),
@@ -165,7 +166,7 @@ PresupuestoUI <- function(id) {
           ),
           column(6,
                  bs4Dash::bs4Card(
-                   title = "Velocidad de Ejecucion vs Requerida",
+                   title = "Velocidad de Ejecución vs Requerida",
                    status = "white", solidHeader = FALSE, width = 12,
                    collapsible = TRUE, elevation = 1,
                    fluidRow(
@@ -187,6 +188,7 @@ PresupuestoUI <- function(id) {
     )
   )
 }
+
 Presupuesto <- function(id, dat) {
   moduleServer(id, function(input, output, session) {
     
@@ -231,7 +233,7 @@ Presupuesto <- function(id, dat) {
     }
     .dim_lbl <- function(dim) {
       switch(dim,
-             linneg = "Linea de Negocio", segmento = "Segmento", asesor = "Asesor",
+             linneg = "Línea de Negocio", segmento = "Segmento", asesor = "Asesor",
              departamento = "Departamento", municipio = "Municipio",
              unidadcomercial = "Unidad Comercial"
       )
@@ -507,7 +509,7 @@ Presupuesto <- function(id, dat) {
           Ppto_Margen_YTD = Ppto_Margen_Anual * mes_actual / 12
         )
       
-      # Para unidadcomercial: enriquecer ejec con dim_cols luego hacer join con ppto por clave natural
+      # Para unidadcomercial: enriquecer ejec con dim_cols luego hacer join con ppto por clave
       if (es_multi) {
         ejec_base <- ejec_ytd %>%
           .join_by_dims(ejec_mes) %>%
@@ -537,8 +539,8 @@ Presupuesto <- function(id, dat) {
             Meta_Mensual_Margen = Ritmo_Margen_Req,
             Proyeccion_Sacos    = Sacos_YTD  + Ritmo_Sacos_Actual  * meses_rest,
             Proyeccion_Margen   = Margen_YTD + Ritmo_Margen_Actual * meses_rest,
-            Prob_Sacos          = pmin(SiError_0(Proyeccion_Sacos  / Ppto_Sacos_Anual),  1),
-            Prob_Margen         = pmin(SiError_0(Proyeccion_Margen / Ppto_Margen_Anual), 1)
+            Prob_Sacos          = SiError_0(Proyeccion_Sacos  / Ppto_Sacos_Anual),
+            Prob_Margen         = SiError_0(Proyeccion_Margen / Ppto_Margen_Anual)
           ) %>%
           arrange(desc(Sacos_YTD))
       } else {
@@ -562,8 +564,8 @@ Presupuesto <- function(id, dat) {
             Meta_Mensual_Margen = Ritmo_Margen_Req,
             Proyeccion_Sacos    = Sacos_YTD  + Ritmo_Sacos_Actual  * meses_rest,
             Proyeccion_Margen   = Margen_YTD + Ritmo_Margen_Actual * meses_rest,
-            Prob_Sacos          = pmin(SiError_0(Proyeccion_Sacos  / Ppto_Sacos_Anual),  1),
-            Prob_Margen         = pmin(SiError_0(Proyeccion_Margen / Ppto_Margen_Anual), 1)
+            Prob_Sacos          = SiError_0(Proyeccion_Sacos  / Ppto_Sacos_Anual),
+            Prob_Margen         = SiError_0(Proyeccion_Margen / Ppto_Margen_Anual)
           ) %>%
           arrange(desc(Sacos_YTD))
       }
@@ -614,7 +616,9 @@ Presupuesto <- function(id, dat) {
       if (vista_acumulada) {
         datos_plot <- datos_grafico %>%
           select(Fecha, acum_ppto, acum_real, meta_acum) %>%
-          pivot_longer(c(acum_ppto, acum_real, meta_acum), names_to = "Tipo", values_to = "Valor") %>%
+          pivot_longer(
+            c(acum_ppto, acum_real, meta_acum), names_to = "Tipo", values_to = "Valor"
+          ) %>%
           mutate(
             Tipo = dplyr::recode(Tipo,
                                  acum_ppto = "Presupuesto Acumulado",
@@ -628,7 +632,9 @@ Presupuesto <- function(id, dat) {
         titulo_g <- titulo_acum; titulo_y <- label_y_acum
       } else {
         datos_plot <- datos_grafico %>%
-          select(Fecha, ppto = all_of(col_ppto), real = all_of(col_real), meta_men = meta_mensual) %>%
+          select(
+            Fecha, ppto = all_of(col_ppto), real = all_of(col_real), meta_men = meta_mensual
+          ) %>%
           pivot_longer(c(ppto, real, meta_men), names_to = "Tipo", values_to = "Valor") %>%
           mutate(
             Tipo = dplyr::recode(Tipo,
@@ -761,8 +767,8 @@ Presupuesto <- function(id, dat) {
           Cumpl_Margen_YTD = SiError_0(Margen_YTD / Ppto_Margen_YTD),
           Cumpl_Sacos_Mes  = SiError_0(Sacos_Mes  / Ppto_Sacos_Mes),
           Cumpl_Margen_Mes = SiError_0(Margen_Mes / Ppto_Margen_Mes),
-          Prob_Sacos       = pmin(SiError_0(Proyeccion_Sacos  / Ppto_Sacos_Anual), 1),
-          Prob_Margen      = pmin(SiError_0(Proyeccion_Margen / Ppto_Margen_Anual), 1),
+          Prob_Sacos       = SiError_0(Proyeccion_Sacos  / Ppto_Sacos_Anual),
+          Prob_Margen      = SiError_0(Proyeccion_Margen / Ppto_Margen_Anual),
           Sem_Sacos        = purrr::map_chr(Prob_Sacos,  ~ .semaforo(.x, "emoji")),
           Sem_Margen       = purrr::map_chr(Prob_Margen, ~ .semaforo(.x, "emoji")),
           .dim_key         = "TOTAL"
@@ -859,8 +865,8 @@ Presupuesto <- function(id, dat) {
         if (length(v) == 0) "Todos" else paste(v, collapse = ", ")
       }
       
-      asesores <- .vals(df$Asesor)
-      lineas   <- .vals(df$CLLinNegNo)
+      asesores  <- .vals(df$Asesor)
+      lineas    <- .vals(df$CLLinNegNo)
       segmentos <- .vals(df$Segmento)
       
       titulo_txt <- paste0(
@@ -941,12 +947,12 @@ Presupuesto <- function(id, dat) {
                  fill = list(Sacos70 = 0, MargenFCC = 0)) %>%
         group_by(Periodo, Fecha) %>%
         summarise(
-          Sacos70   = sum(Sacos70,   na.rm = TRUE),
-          MargenFCC = sum(MargenFCC, na.rm = TRUE),
+          Sacos70    = sum(Sacos70,   na.rm = TRUE),
+          MargenFCC  = sum(MargenFCC, na.rm = TRUE),
           MargenKilo = sum(MargenFCC / (Sacos70 / 70), na.rm = TRUE),
-          PptoSS    = sum(PptoSS,    na.rm = TRUE),
-          PptoMa    = sum(PptoMa,    na.rm = TRUE),
-          .groups   = "drop"
+          PptoSS     = sum(PptoSS,   na.rm = TRUE),
+          PptoMa     = sum(PptoMa,   na.rm = TRUE),
+          .groups    = "drop"
         ) %>%
         pivot_wider(names_from = Periodo, values_from = Sacos70:PptoMa) %>%
         mutate(
@@ -1082,7 +1088,7 @@ Presupuesto <- function(id, dat) {
               "display:inline-block;width:15px;height:15px;background-color:#F0FDF4;",
               "border:1px solid #ccc;margin-right:6px;vertical-align:middle;"
             )),
-            tags$span(paste0("Ano Anterior (", periodo_ant, ")"),
+            tags$span(paste0("Año Anterior (", periodo_ant, ")"),
                       style = "font-weight:bold;font-size:12px;"),
             tags$span(style = paste0(
               "display:inline-block;width:15px;height:15px;background-color:#F8FAFC;",
@@ -1112,7 +1118,7 @@ Presupuesto <- function(id, dat) {
             ))),
             tags$br(),
             tags$span(HTML(paste0(
-              "<b>Comparacion con ano anterior:</b> ",
+              "<b>Comparación con año anterior:</b> ",
               "<code style='background:#f3f4f6;color:#374151;padding:1px 5px;border-radius:3px;'>",
               "(Actual \u2212 Anterior) \u00f7 |Anterior|</code>"
             )))
@@ -1124,9 +1130,11 @@ Presupuesto <- function(id, dat) {
           locations = cells_body(rows = Fecha == "TOTAL")
         ) %>%
         gt_pct_style_semaforo(!!sym(cn$cumpl_sacos))    %>% gt_var_style(VarSS) %>%
-        gt_pct_style_semaforo(!!sym(cn$cumpl_ss_acum))  %>% gt_var_style(!!sym(cn$varss_acum)) %>%
+        gt_pct_style_semaforo(!!sym(cn$cumpl_ss_acum))  %>%
+        gt_var_style(!!sym(cn$varss_acum)) %>%
         gt_pct_style_semaforo(!!sym(cn$cumpl_margen))   %>% gt_var_style(VarMgn) %>%
-        gt_pct_style_semaforo(!!sym(cn$cumpl_mgn_acum)) %>% gt_var_style(!!sym(cn$varmgn_acum))
+        gt_pct_style_semaforo(!!sym(cn$cumpl_mgn_acum)) %>%
+        gt_var_style(!!sym(cn$varmgn_acum))
       
       waiter_hide()
       return(gt1)
@@ -1134,7 +1142,7 @@ Presupuesto <- function(id, dat) {
     
     ## Titulo dinamico sub-card proyeccion ----
     output$titulo_proyeccion <- renderUI({
-      paste0("Proyeccion de Cierre por Dimension \u2014 ", periodo_r())
+      paste0("Proyección de Cierre por Dimensión \u2014 ", periodo_r())
     })
     
     ## Graficos de serie temporal ----
@@ -1142,8 +1150,8 @@ Presupuesto <- function(id, dat) {
       construir_grafico_serie(
         datos_grafico_r(), input$vista_acumulada,
         "Sacos_Real", "Sacos_Ppto", "Sacos70",
-        "Ejecucion vs Presupuesto \u2014 Sacos (Acumulado)",
-        "Ejecucion vs Presupuesto \u2014 Sacos (Mensual)",
+        "Ejecución vs Presupuesto \u2014 Sacos (Acumulado)",
+        "Ejecución vs Presupuesto \u2014 Sacos (Mensual)",
         "Sacos Acumulados", "Sacos Mensuales", "numero"
       )
     })
@@ -1151,8 +1159,8 @@ Presupuesto <- function(id, dat) {
       construir_grafico_serie(
         datos_grafico_r(), input$vista_acumulada,
         "Margen_Real", "Margen_Ppto", "MargenFCC",
-        "Ejecucion vs Presupuesto \u2014 Margen (Acumulado)",
-        "Ejecucion vs Presupuesto \u2014 Margen (Mensual)",
+        "Ejecución vs Presupuesto \u2014 Margen (Acumulado)",
+        "Ejecución vs Presupuesto \u2014 Margen (Mensual)",
         "Margen Acumulado", "Margen Mensual", "dinero"
       )
     })
@@ -1164,8 +1172,8 @@ Presupuesto <- function(id, dat) {
       es_uc <- dim == "unidadcomercial"
       if (es_uc) list(
         .dim_key = reactable::colDef(show = FALSE),
-        RazSoc   = reactable::colDef(name = "Razon Social",      minWidth = 200, sticky = "left"),
-        LinNeg   = reactable::colDef(name = "Linea de Negocio",  minWidth = 150, sticky = "left")
+        RazSoc   = reactable::colDef(name = "Razón Social",     minWidth = 200, sticky = "left"),
+        LinNeg   = reactable::colDef(name = "Línea de Negocio", minWidth = 150, sticky = "left")
       ) else list(
         .dim_key = reactable::colDef(name = .dim_lbl(dim), minWidth = 180, sticky = "left")
       )
@@ -1345,7 +1353,7 @@ Presupuesto <- function(id, dat) {
             arrange(desc(FecFact))
           
           if (nrow(df_modal) == 0) {
-            return(p("Sin lotes registrados para esta dimension en el periodo.",
+            return(p("Sin lotes registrados para esta dimensión en el periodo.",
                      style = "color:#888; margin-top:12px;"))
           }
           
@@ -1373,8 +1381,8 @@ Presupuesto <- function(id, dat) {
                 name = "Fecha Factura", minWidth = 110,
                 cell = function(v) if (is.na(v)) "\u2014" else format(as.Date(v), "%d %b %Y")
               ),
-              PerRazSoc  = reactable::colDef(name = "Razon Social",  minWidth = 180),
-              CLLinNegNo = reactable::colDef(name = "Linea Negocio", minWidth = 130),
+              PerRazSoc  = reactable::colDef(name = "Razón Social",  minWidth = 180),
+              CLLinNegNo = reactable::colDef(name = "Línea Negocio", minWidth = 130),
               CLLotCod   = reactable::colDef(name = "Lote",          minWidth = 80),
               Asesor     = reactable::colDef(name = "Asesor",        minWidth = 120),
               Segmento   = reactable::colDef(name = "Segmento",      minWidth = 100),
@@ -1415,7 +1423,7 @@ Presupuesto <- function(id, dat) {
         ))),
         htmltools::tags$br(),
         htmltools::tags$span(htmltools::HTML(paste0(
-          "<b>Proyeccion de cierre:</b> ",
+          "<b>Proyección de cierre:</b> ",
           "<code style='background:#f3f4f6;color:#374151;padding:1px 5px;border-radius:3px;'>",
           "Ejecutado YTD \u00f7 Meses transcurridos \u00d7 12</code>"
         ))),
@@ -1423,7 +1431,7 @@ Presupuesto <- function(id, dat) {
         htmltools::tags$span(htmltools::HTML(paste0(
           "<b>Verosimilitud:</b> ",
           "<code style='background:#f3f4f6;color:#374151;padding:1px 5px;border-radius:3px;'>",
-          "min(Proyeccion \u00f7 Presupuesto anual, 100%)</code>"
+          "Proyección \u00f7 Presupuesto anual</code>"
         ))),
         htmltools::tags$br(),
         htmltools::tags$span(htmltools::HTML(paste0(
@@ -1471,7 +1479,7 @@ Presupuesto <- function(id, dat) {
           tooltip = paste0(
             "<b>", dim, "</b><br>",
             "Cumpl. Acum. ", periodo, ": ", scales::percent(.cx, accuracy = 0.1), "<br>",
-            "Proyeccion cierre: ",          scales::percent(.cy, accuracy = 0.1), "<br>",
+            "Proyección cierre: ",          scales::percent(.cy, accuracy = 0.1), "<br>",
             lbl_medida, " Acum.: ", fmt_val(.ytd), "<br>",
             "Brecha: ", fmt_val(.brecha)
           )
@@ -1502,14 +1510,14 @@ Presupuesto <- function(id, dat) {
         ) %>%
         layout(
           title = paste0(
-            "Proyeccion de Cierre \u2014 ", periodo, " \u00b7 ", lbl, " (", lbl_medida, ")"
+            "Proyección de Cierre \u2014 ", periodo, " \u00b7 ", lbl, " (", lbl_medida, ")"
           ),
           xaxis = list(
             title = paste0("Cumpl. Acum. ", periodo, " (%)"),
             tickformat = ".0%", range = c(0, x_max)
           ),
           yaxis = list(
-            title = "Proyeccion de Cierre (%)",
+            title = "Proyección de Cierre (%)",
             tickformat = ".0%", range = c(0, y_max)
           ),
           shapes = list(
@@ -1579,7 +1587,7 @@ Presupuesto <- function(id, dat) {
         ) %>%
         add_bars(
           data = df, x = ~(.b_amarillo - .b_rojo), y = ~dim, base = ~.b_rojo,
-          orientation = "h", width = band_w, name = "Atencion (70-90%)",
+          orientation = "h", width = band_w, name = "Atención (70-90%)",
           marker = list(color = "#FEF9C3", line = list(color = "#FDE68A", width = 0.5)),
           hoverinfo = "skip", showlegend = TRUE
         ) %>%
@@ -1610,7 +1618,7 @@ Presupuesto <- function(id, dat) {
       p %>%
         layout(
           title   = paste0(
-            "Velocidad de Ejecucion vs Requerida \u2014 ", lbl, " (", lbl_medida, ")"
+            "Velocidad de Ejecución vs Requerida \u2014 ", lbl, " (", lbl_medida, ")"
           ),
           barmode = "overlay",
           xaxis   = list(
@@ -1640,7 +1648,7 @@ ui <- bs4DashPage(
 server <- function(input, output, session) {
   Presupuesto(
     "presupuesto",
-    dat = reactive({ BaseDatos %>% filter(Asesor == "JGCANON", Segmento == "GRANDES")})
+    dat = reactive({ BaseDatos %>% filter(Asesor == "JGCANON", Segmento == "GRANDES") })
   )
 }
 shinyApp(ui, server)

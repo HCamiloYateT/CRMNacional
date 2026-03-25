@@ -109,11 +109,7 @@ get_system_data <- function(uid, pwd) {
                                     (SELECT MedTRM FROM EXPMECAF WHERE MedFec = (SELECT MAX(MedFec) FROM EXPMECAF)) AS TRM"
     )
     
-    # Consulta para obtener precios adicionales
-    
-    # NY
-    # Contrato "C" de Nueva York de café ----
-    
+    # Contrato "C" de Nueva York de café
     fechai <- as.Date("2025-10-01")
     
     NY <- ConsultaSistema("syscafe", 
