@@ -43,3 +43,18 @@ shiny::runApp("CRMNacional")
 
 - El repositorio contiene tanto la capa de visualización (app Shiny) como procesos batch/ETL en scripts separados.
 - Varias rutinas dependen de conexiones internas y datos no versionados (por ejemplo `CRMNacional/data/data.RData`).
+
+## App de prueba de módulos (desarrollo)
+
+Para probar módulos de forma aislada en una app `bs4Dash`, se agregó el script:
+
+- `CRMNacional/dev/probar_modulos_bs4dash.R`
+
+Uso rápido:
+
+```r
+setwd("CRMNacional")
+shiny::runApp("dev/probar_modulos_bs4dash.R")
+```
+
+En ese archivo hay un bloque `MODULOS_ACTIVOS` donde puedes **comentar/descomentar** módulos para activar solo los que quieras validar, y un `CATALOGO_MODULOS` amplio con opciones de prueba para la mayoría de módulos actuales.
