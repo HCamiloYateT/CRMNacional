@@ -18,7 +18,7 @@ FiltrosUI <- function(id) {
   
   # Variables de fecha derivadas del objeto global data
   .fec_min <- min(data$FecFact, na.rm = TRUE)
-  .fec_max <- max(data$FecFact, na.rm = TRUE)
+  .fec_max <- Sys.Date()
   
   # Choices iniciales (llamada unica a Choices())
   cho <- Choices()
@@ -28,7 +28,8 @@ FiltrosUI <- function(id) {
     fluidRow(
       column(5,
              ListaDesplegable(ns("FT_Periodo"), "Valores a Usar",
-                              multiple = FALSE, choices = c("DINÁMICO", "ESTÁTICO"))
+                              multiple = FALSE, choices = c("DINÁMICO", "ESTÁTICO"),
+                              selected = "DINÁMICO")
       ),
       column(7,
              FormatearTexto("Fecha de Factura", tamano_pct = 1),
@@ -122,7 +123,7 @@ FiltrosServer <- function(id, usuario, productos_cache) {
         pull(Categoria) %>%
         unique() %>%
         sort()
-      categorias <- categorias[!is.na(categorias)]
+      categorias <- c(categorias[!is.na(categorias)], "SIN DATO")
       
       updatePickerInput(session, "FT_Categoria",
                         choices  = categorias,

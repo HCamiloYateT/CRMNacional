@@ -72,30 +72,265 @@ customDropdownMenu <-  function(..., badgeStatus = NULL, icon = NULL,
 
 
 # Datos ----
+
+cargar_fact <- function() {
+  fact_sys <- ConsultaSistema(
+    "syscafe",
+    query = "SELECT F1.FcnLot      AS CLLotCod,
+                    F2.FcnTip,
+                    MIN(F2.FcnFec) AS FecPrimerFact,
+                    MAX(F2.FcnFec) AS FecFact,
+                    SUM(F1.FcnKilLot)         AS KilosFact,
+                    SUM(F1.FcnSacLot)         AS SacosFact,
+                    SUM(F1.FcnKilLot / 70)    AS SacFact70
+             FROM   FCTFACN1 F1
+             LEFT   JOIN FCTFACNA F2 ON F1.FcnNum = F2.FcnNum
+             WHERE  F1.CiaCod = 10
+               AND  F2.CiaCod = 10
+               AND  F2.FcnEtd = 'C'
+             GROUP  BY F1.FcnLot, F2.FcnTip"
+  )
+  fact_margenes <- Consulta(
+    "SELECT LOTE            AS CLLotCod,
+            SUM(MARGEN)     AS Margen,
+            SUM(KILOS / 70) AS SacosPYG
+     FROM   CRMNALMARLOT
+     WHERE  TIP = 'NAL'
+     GROUP  BY LOTE"
+  )
+  fact_sys %>%
+    left_join(fact_margenes, by = "CLLotCod") %>%
+    filter(FecFact >= as.Date("2020-01-01")) %>%
+    mutate(Facturado = TRUE, FecFact = as.Date(FecFact))
+} 
+.lotes_activos_sql <- function(anho_corte) {
+  ConsultaSistema(
+    "syscafe",
+    query = sprintf(
+      "SELECT CLSucCod, CLLotCod, CLPdcCod, CLPdcLin,
+              CLPdcAnoEm*100 + CLPdcMesEm AS Periodo,
+              CLPdcCntCl, CLLotCan AS SacLote, CLLotFec AS FecAsignLote,
+              CLotrCod AS CodOrdTril, CLOTrFec AS FecOrdTril,
+              CLLotSacPr AS SacProd, CLLotFecPr AS FecProd,
+              CLIDeCod AS CodDesp, CLIDeFec AS FecDesp, CLLotSacDe AS SacDesp,
+              CLPdcFctAD, CLLotSacFa AS SacFact, CLPdcCanFa, CLLinNegCo,
+              CLLotSacXP, CLLotPenXD, CLLotDesXF, CLCliNit, CLCliRazSo,
+              CLLinNegCo AS LinNegCod, CLLinNegNo,
+              CLLinProCo AS LinProCod, CLLinProNo,
+              CLMCCod AS MCCod, CLMCNom, CLMrcCod AS MrcCod, CLMrcNom
+       FROM   EXPCUALO
+       WHERE  CiaCod = 10
+         AND  CLPdcVtaNa = 1
+         AND  CLCliNit <> 32
+         AND  CLLinNegCo IN (10000, 21000)
+         AND  CLLotCan > 0
+         AND  YEAR(CONVERT(date, CLLotFec, 23)) >= %d",
+      anho_corte
+    )
+  )
+}
+cargar_lotes_incremental <- function(datos_previos = NULL) {
+  if (is.null(datos_previos) || nrow(datos_previos) == 0L) {
+    message("Sin cache de lotes: ejecutando carga completa...")
+    return(.lotes_full_sql())
+  }
+  anho_corte    <- lubridate::year(Sys.Date()) - 1L
+  lotes_activos <- .lotes_activos_sql(anho_corte)
+  
+  # Congelados: todo lo del cache que la consulta activa no cubre.
+  # El anti_join es suficiente: .lotes_activos_sql ya trae todos los lotes
+  # con FecAsignLote >= anho_corte, por lo que el complemento es siempre anterior.
+  lotes_congelados <- datos_previos %>%
+    anti_join(lotes_activos, by = "CLLotCod")
+  
+  bind_rows(lotes_congelados, lotes_activos)
+}
+cargar_datos_base <- function(ruta_cache_lotes = "data/lotes_raw.rds") {
+  
+  # Tabla maestra de sucursales ----
+  sucs <- data.frame(
+    SucCod = c(12, 15, 20, 26, 30, 32, 35, 50, 55),
+    Sucursal = c("Trilladora 12","Bachué", "Medellín", "Popayán", "Armenia", "Arenales", "Pereira", "Bucaramanga", "Huila")) %>% 
+    mutate(across(where(is.character), LimpiarNombres))
+  
+  # NIT principal por cliente (snapshot mas reciente) ----
+  NITPPAL <- Consulta(
+    "SELECT DISTINCT FecProceso, CLCliNit AS PerCod, CliNitPpal FROM CRMNALCLIENTE"
+  ) %>%
+    mutate(FecProceso = as.Date(FecProceso)) %>%
+    group_by(PerCod) %>%
+    filter(FecProceso == max(FecProceso)) %>%
+    ungroup() %>%
+    select(-FecProceso)
+  
+  # Clientes desde sistema transaccional ----
+  NCLIENTE <- ConsultaSistema(
+    "syscafe",
+    query = "SELECT c.CliNit AS PerCod, c.CliCont, c.CliDir,
+                    c.CliDir1, c.CliTel, c.CliConCom, c.CliTelCom,
+                    c.CliEmlCom, c.CiuExtCod, c.CliFPagDbl,
+                    ce.CiuExtNom, p.PerRazSoc
+             FROM   NCLIENTE c
+             LEFT   JOIN NCIUEXT  ce ON c.CiuExtCod = ce.CiuExtCod
+             LEFT   JOIN NPERSONA p  ON c.CliNit     = p.PerCod"
+  ) %>%
+    left_join(NITPPAL, by = "PerCod") %>%
+    mutate(
+      CliNitPpal = ifelse(is.na(CliNitPpal), PerCod, CliNitPpal),
+      across(where(is.character), \(x) ifelse(x %in% c("", "."), NA, x))
+    )
+  
+  # Pedidos activos de venta nacional ----
+  ped <- ConsultaSistema("syscafe",
+    query = "SELECT p1.PdcCod, pd.PdcCntCli AS PdcRefCli, pd.PdcFecCre,
+                    p1.PdcLin, p1.PdcCan, pd.PdcUsu AS Usuario,
+                    um.UMeFac, pd.PdcTipCaf AS TipCaf,
+                    pd.PdcPrePes AS PdcPrecioKilo
+             FROM   EXPPEDI1 p1
+             INNER  JOIN EXPPEDID pd ON p1.PdcCod = pd.PdcCod
+             LEFT   JOIN NUNIMEDI um ON pd.UMeCod  = um.UMeCod
+             WHERE  p1.CiaCod = 10 AND pd.CiaCod = 10
+               AND  pd.CliNit <> 32 AND pd.PdcEst = 'A'
+               AND  pd.PdcVtaNal = 1"
+  )
+  
+  # Lotes con carga incremental ----
+  datos_previos <- tryCatch(
+    {
+      prev <- readRDS(ruta_cache_lotes)
+      if (is.data.frame(prev) && nrow(prev) > 0L) prev else NULL
+    },
+    error = function(e) NULL
+  )
+  lotes_raw <- cargar_lotes_incremental(datos_previos)
+  
+  # Facturacion por lote ----
+  fact_lotes <- cargar_fact()
+  
+  # Facturas historicas consolidadas por cliente ----
+  FACT <- ConsultaSistema(
+    "syscafe",
+    query = "SELECT F2.FctNit,
+                    MIN(F2.FcnFec) AS MinFecFact,
+                    MAX(F2.FcnFec) AS UltFecFact,
+                    SUM(F1.FcnKilLot)      AS KilosFact,
+                    SUM(F1.FcnSacLot)      AS SacosFact,
+                    SUM(F1.FcnKilLot / 70) AS SacFact70
+             FROM   FCTFACN1 F1
+             LEFT   JOIN FCTFACNA F2 ON F1.FcnNum = F2.FcnNum
+             WHERE  F1.CiaCod = 10 AND F2.CiaCod = 10 AND F2.FcnEtd = 'C'
+             GROUP  BY F2.FctNit"
+  ) %>%
+    left_join(
+      NCLIENTE %>% select(PerCod, PerRazSoc) %>% distinct(),
+      by = c("FctNit" = "PerCod")
+    )
+  
+  # Construccion del cuadro de datos principal ----
+  data_base <- lotes_raw %>%
+    left_join(sucs, by = c("CLSucCod" = "SucCod")) %>%
+    left_join(NITPPAL, by = c("CLCliNit" = "PerCod")) %>%
+    mutate(CliNitPpal = ifelse(is.na(CliNitPpal), CLCliNit, CliNitPpal)) %>%
+    left_join(
+      NCLIENTE %>% filter(PerCod == CliNitPpal) %>% select(-PerCod),
+      by = "CliNitPpal"
+    ) %>%
+    left_join(ped, by = c("CLPdcCod" = "PdcCod", "CLPdcLin" = "PdcLin")) %>%
+    left_join(fact_lotes, by = "CLLotCod") %>%
+    filter(LinNegCod == 21000L | (LinNegCod == 10000L & TipCaf != "E")) %>%
+    mutate(MarKilo = Margen / KilosFact) %>%
+    # Imputacion jerarquica de margen por kilo (4 niveles) ----
+  group_by(CLCliNit, CLLinNegNo, LinProCod, MCCod, MrcCod) %>%
+    mutate(
+      MarKilo = ifelse(is.na(MarKilo), mean(MarKilo, na.rm = TRUE), MarKilo)
+    ) %>%
+    group_by(CLLinNegNo, LinProCod, MCCod, MrcCod) %>%
+    mutate(
+      MarKilo = ifelse(is.na(MarKilo), mean(MarKilo, na.rm = TRUE), MarKilo)
+    ) %>%
+    group_by(CLLinNegNo, LinProCod) %>%
+    mutate(
+      MarKilo = ifelse(is.na(MarKilo), mean(MarKilo, na.rm = TRUE), MarKilo)
+    ) %>%
+    group_by(CLLinNegNo) %>%
+    mutate(
+      MarKilo = ifelse(is.na(MarKilo), mean(MarKilo, na.rm = TRUE), MarKilo)
+    ) %>%
+    ungroup() %>%
+    mutate(
+      Margen = ifelse(
+        is.na(Margen),
+        MarKilo * SacLote * ifelse(LinNegCod == 10000L, 62.5, 70),
+        Margen
+      ),
+      FechaEmbarque = as.Date(paste(Periodo, "01"), "%Y%m%d"),
+      across(
+        contains("Fec"),
+        ~ if_else(as.Date(.) == as.Date("1753-01-01"), as.Date(NA), as.Date(.))
+      ),
+      CliNitPpal = ifelse(is.na(CliNitPpal), CLCliNit, CliNitPpal),
+      CLLinNegNo = ifelse(CLLinNegNo == "DIFERENCIADOS", "A LA MEDIDA", CLLinNegNo),
+      LinNegCod  = ifelse(LinNegCod == 20000L, 21000L, LinNegCod),
+      Kilos      = SacDesp * UMeFac
+    ) %>%
+    group_by(LinNegCod, CLLinProNo) %>%
+    mutate(
+      PendProducir  = SacLote - SacProd,
+      PendDespachar = SacLote - pmax(SacDesp, 0),
+      PendFacturar  = SacLote - pmax(PendDespachar, 0) - coalesce(SacosFact, 0)
+    ) %>%
+    ungroup() %>%
+    select(
+      CLSucCod, Sucursal, CLLotCod, FechaEmbarque,
+      CLPdcCod, PdcPrecioKilo, PdcRefCli, PdcFecCre, CLPdcLin, CLPdcCntCl,
+      Usuario, SacLote, FecAsignLote,
+      CodOrdTril, FecOrdTril, SacProd, FecProd,
+      CodDesp, FecDesp, SacDesp,
+      FecFact, KilosFact, SacosFact, SacFact70,
+      Margen, SacosPYG, MarKilo, UMeFac, Kilos,
+      LinNegCod, CLLinNegNo, LinProCod, MCCod, MrcCod,
+      CLPdcFctAD, SacFact, CLPdcCanFa,
+      CliNitPpal, CLCliNit, PerRazSoc, CliCont, CliDir, CliDir1,
+      CliTel, CliConCom, CliTelCom, CliEmlCom, CiuExtNom,
+      CLLotSacXP, CLLotPenXD, CLLotDesXF,
+      PendProducir, PendDespachar, PendFacturar
+    ) %>%
+    mutate(across(where(is.character), ~ replace_na(., "SIN DATO")))
+  
+  # Persistir cache de lotes para proxima ejecucion incremental ----
+  tryCatch(
+    saveRDS(lotes_raw, ruta_cache_lotes),
+    error = function(e) warning("No se pudo persistir lotes_raw: ", e$message)
+  )
+  
+  list(data = data_base, NCLIENTE = NCLIENTE, FACT = FACT)
+}
+
+
 get_fnc_data <- function() {
   tryCatch({
     url <- 'https://federaciondecafeteros.org/wp/'
     contenido <- read_html(url)
     
-    precio <- contenido %>%
-      html_nodes("ul.lista li[tabindex='1']") %>%
-      html_nodes("strong") %>%
-      html_text() %>% 
-      .[1]
+    # Extraer todos los textos de los items del menu
+    items <- contenido %>%
+      html_nodes("ul.e-n-menu-heading li.e-n-menu-item span.e-n-menu-title-text") %>%
+      html_text(trim = TRUE)
     
-    bolsa <- contenido %>%
-      html_nodes("ul.lista li[tabindex='2']") %>%
-      html_nodes("strong") %>%
-      html_text() %>% 
-      .[1]
+    # Precio interno: primer item (contiene "$2.245.000")
+    precio_raw <- items[1]
+    precio <- as.numeric(gsub("\\D", "", precio_raw))
+    
+    # Bolsa NY: segundo item (contiene "$300,85")
+    bolsa_raw <- items[2]
+    bolsa <- as.numeric(gsub(".*:\\s*\\$?", "", bolsa_raw) %>% gsub(",", ".", .))
     
     list(
-      precio = as.numeric(gsub("\\D", "", precio)),
-      bolsa = as.numeric(gsub(",", ".", bolsa))
+      precio = precio,
+      bolsa = bolsa
     )
   }, error = function(e) {
     warning("Error obteniendo datos de FNC: ", e$message)
-    # Valores predeterminados en caso de error
     list(precio = NA, bolsa = NA)
   })
 }

@@ -188,7 +188,6 @@ PresupuestoUI <- function(id) {
     )
   )
 }
-
 Presupuesto <- function(id, dat) {
   moduleServer(id, function(input, output, session) {
     
@@ -1648,7 +1647,7 @@ ui <- bs4DashPage(
 server <- function(input, output, session) {
   Presupuesto(
     "presupuesto",
-    dat = reactive({ BaseDatos %>% filter(Asesor == "JGCANON", Segmento == "GRANDES") })
+    dat = reactive({ BaseDatos_t })
   )
 }
 shinyApp(ui, server)

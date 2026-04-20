@@ -4,14 +4,13 @@ header <- bs4DashNavbar(status = "white", border = FALSE,
                                                href = "https://analitica.racafe.com/PortalAnalitica/",
                                                image = "logo2.png"),
                         controlbarIcon = icon("gears"),
-                        leftUi = tagList(uiOutput("user"),
-                                         uiOutput("espacio"),
-                                         tags$li(class='dropdown', 
-                                                 div(style = "display: flex; justify-content: center; 
-                                                     align-items: center; height: 100%; width: 100%;",
-                                                     actionBttn("FT_Actualizar", icon = icon("sync"), size = "xs")
-                                                     )
+                        leftUi = tagList(
+                                         tags$li(class = "dropdown",
+                                                 style = "display:flex;align-items:center; gap:8px;padding:8px 12px;cursor:default;",
+                                                 uiOutput("user"),
+                                                 actionBttn("FT_Actualizar", icon = icon("sync"), size = "xs")
                                                  )
+                                                 
                                          ),
                         rightUi = tagList(
                           customDropdownMenu(icon = icon("arrow-trend-up"), showBadge = FALSE,

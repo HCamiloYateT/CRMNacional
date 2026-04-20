@@ -1,5 +1,4 @@
 # HT_Resumen ----
-
 ResumenTotalUI <- function(id) {
   ns <- NS(id)
   
@@ -35,10 +34,9 @@ ResumenTotalUI <- function(id) {
     # Seccion unidades comerciales
     .seccion("Unidades Comerciales", "users"),
     fluidRow(
-      column(3, CajaModalUI(ns("kpi_activas"))),
-      column(3, CajaModalUI(ns("kpi_recuperar"))),
-      column(3, CajaModalUI(ns("kpi_recuperadas"))),
-      column(3, CajaModalUI(ns("kpi_nuevas")))
+      column(4, CajaModalUI(ns("kpi_activas"))),
+      column(4, CajaModalUI(ns("kpi_recuperar"))),
+      column(4, CajaModalUI(ns("kpi_nuevas")))
     ),
     # Seccion actividad comercial
     .seccion("Actividad Comercial", "bullseye"),
@@ -86,64 +84,88 @@ ResumenTotal <- function(id, dat, dat_t, dat_c, dat_leads, dat_oportunidades, da
       dat() %>% select(LinNegCod, CliNitPpal) %>% distinct()
     })
     
-    # Snapshot CRMNALSEGR al 1ro del mes, restringido a nits_dat()
+    # Carga unica de CRMNALSEGR — base para snapshot del mes e historial de nuevos
+    segr_completo <- reactive({
+      t1 <- CargarDatos("CRMNALSEGR") %>%
+        mutate(FecProceso = as.Date(FecProceso))
+    })
+    
+    # Se derivan de dat_t() que ya aplica esos tres filtros sin restriccion de fecha ni NIT
+    filtros_dim <- reactive({
+      dat_t() %>%
+        select(LinNegCod, Asesor, Segmento) %>%
+        distinct()
+    })
+    
+    # Snapshot CRMNALSEGR al 1ro del mes, filtrado por dimensiones (no por NIT)
     segr_corte <- reactive({
-      CargarDatos("CRMNALSEGR") %>%
-        mutate(FecProceso = as.Date(FecProceso)) %>%
+      d <- filtros_dim()
+      segr_completo() %>%
         filter(FecProceso == corte_mes()) %>%
-        semi_join(nits_dat(), by = join_by(LinNegCod, CliNitPpal))
+        left_join(
+          dat_c() %>% select(LinNegCod, CliNitPpal, Asesor, Segmento) %>% distinct(),
+          by = join_by(LinNegCod, CliNitPpal)
+        ) %>%
+        filter(
+          LinNegCod %in% d$LinNegCod,
+          Asesor    %in% d$Asesor,
+          Segmento  %in% d$Segmento
+        )
     })
     
-    # Universos historicos para clasificacion de UC nuevas
-    nits_segr_todos <- reactive({
-      CargarDatos("CRMNALSEGR") %>% select(LinNegCod, CliNitPpal) %>% distinct()
-    })
-    nits_crmnalcliente_todos <- reactive({
-      CargarDatos("CRMNALCLIENTE") %>% select(LinNegCod, CliNitPpal) %>% distinct()
-    })
-    nits_fact_todos <- reactive({
-      FACT %>% select(CliNitPpal = FctNit) %>% distinct()
-    })
-    
-    # UC de dat() con transacciones en lo corrido del mes en curso
-    nits_mes_corrido <- reactive({
-      dat() %>%
-        filter(PrimerDia(FecFact) == corte_mes()) %>%
+    # NITs con presencia en CRMNALSEGR antes del mes vigente — para deteccion de nuevos
+    nits_segr_antes_mes <- reactive({
+      segr_completo() %>%
+        filter(FecProceso == corte_mes()) %>%
         select(LinNegCod, CliNitPpal) %>%
         distinct()
     })
     
-    # Reactivos de conteo UC ----
-    
-    # Activas: clasificadas como CLIENTE en el snapshot del 1ro del mes
-    val_activas <- reactive({
-      aux <- segr_corte() %>% filter(SegmentoRacafe == "CLIENTE")
-      n_distinct(aux$LinNegCod, aux$CliNitPpal)
+    # NITs con al menos una factura antes del mes vigente — para deteccion de nuevos
+    nits_fact_antes_mes <- reactive({
+      FACT %>%
+        filter(as.Date(UltFecFact) < corte_mes()) %>%
+        select(CliNitPpal = FctNit) %>%
+        distinct()
     })
     
-    # A recuperar: clasificadas como CLIENTE A RECUPERAR en el snapshot del 1ro del mes
-    val_recuperar <- reactive({
-      aux <- segr_corte() %>% filter(SegmentoRacafe == "CLIENTE A RECUPERAR")
-      n_distinct(aux$LinNegCod, aux$CliNitPpal)
-    })
-    
-    # Recuperadas: CLIENTE A RECUPERAR al 1ro del mes que ya facturaron en lo corrido
-    val_recuperadas <- reactive({
-      aux <- segr_corte() %>%
-        filter(SegmentoRacafe == "CLIENTE A RECUPERAR") %>%
+    # UC de dat_f() con transacciones en lo corrido del mes en curso
+    nits_mes_corrido <- reactive({
+      dat_f() %>%
+        filter(PrimerDia(FecFact) == corte_mes()) %>%
         select(LinNegCod, CliNitPpal) %>%
-        semi_join(nits_mes_corrido(), by = join_by(LinNegCod, CliNitPpal))
-      n_distinct(aux$LinNegCod, aux$CliNitPpal)
+        distinct()
+    })
+    # Reactivos de UC — dataframes base compartidos entre conteo y drill-down ----
+    
+    # Activas: dat filtrado a NITs clasificados como CLIENTE en el snapshot del corte
+    df_activas <- reactive({
+      nits <- segr_corte() %>%
+        filter(SegmentoRacafe == "CLIENTE") %>%
+        select(LinNegCod, CliNitPpal)
+      dat_c() %>% semi_join(nits, by = c("LinNegCod", "CliNitPpal"))
     })
     
-    # Nuevas: con facturacion en lo corrido del mes sin ningun historial previo en Racafe
-    val_nuevas <- reactive({
-      aux <- nits_mes_corrido() %>%
-        anti_join(nits_segr_todos(),          by = join_by(LinNegCod, CliNitPpal)) %>%
-        anti_join(nits_crmnalcliente_todos(), by = join_by(LinNegCod, CliNitPpal)) %>%
-        anti_join(nits_fact_todos(),          by = join_by(CliNitPpal))
-      n_distinct(aux$LinNegCod, aux$CliNitPpal)
+    # A recuperar: dat filtrado a NITs clasificados como CLIENTE A RECUPERAR en el snapshot
+    df_recuperar <- reactive({
+      nits <- segr_corte() %>%
+        filter(SegmentoRacafe == "CLIENTE A RECUPERAR") %>%
+        select(LinNegCod, CliNitPpal)
+      dat_c() %>% semi_join(nits, by = c("LinNegCod", "CliNitPpal"))
     })
+    
+    # Nuevas: dat filtrado a NITs del mes corrido sin presencia previa en segr ni en FACT
+    df_nuevas <- reactive({
+      nits <- nits_mes_corrido() %>%
+        anti_join(nits_segr_antes_mes(), by = c("LinNegCod", "CliNitPpal")) %>%
+        anti_join(nits_fact_antes_mes(), by = "CliNitPpal")
+      dat_c() %>% semi_join(nits, by = c("LinNegCod", "CliNitPpal"))
+    })
+    
+    # Conteos derivados directamente de los dataframes — unica fuente de verdad
+    val_activas  <- reactive({ n_distinct(df_activas()$LinNegCod,  df_activas()$CliNitPpal) })
+    val_recuperar <- reactive({ n_distinct(df_recuperar()$LinNegCod, df_recuperar()$CliNitPpal) })
+    val_nuevas   <- reactive({ n_distinct(df_nuevas()$LinNegCod,   df_nuevas()$CliNitPpal) })
     
     # Reactivos de conteo comercial ----
     val_leads <- reactive({
@@ -198,14 +220,11 @@ ResumenTotal <- function(id, dat, dat_t, dat_c, dat_leads, dat_oportunidades, da
         group_by(LinNegCod, CliNitPpal) %>%
         filter(FecProceso == max(FecProceso)) %>%
         ungroup() %>%
-        inner_join(
-          dat_t() %>% select(LinNegCod, Segmento, Asesor, Responsable) %>% distinct(),
-          by = join_by(LinNegCod, Segmento, Asesor, Responsable)
-        ) %>%
-        summarise(
-          ppto_sacos  = sum(SSPpto,    na.rm = TRUE) / 12 * mes,
-          ppto_margen = sum(MNFCCPpto, na.rm = TRUE) / 12 * mes
-        )
+        inner_join(dat_t() %>% select(LinNegCod, Segmento, Asesor) %>% distinct(),
+                   by = join_by(LinNegCod, Segmento, Asesor)) %>%
+        summarise(ppto_sacos  = sum(SSPpto,    na.rm = TRUE) / 12 * mes,
+                  ppto_margen = sum(MNFCCPpto, na.rm = TRUE) / 12 * mes
+                  )
     })
     
     # Cumplimiento acumulado hasta el mes en curso
@@ -230,11 +249,10 @@ ResumenTotal <- function(id, dat, dat_t, dat_c, dat_leads, dat_oportunidades, da
       )
     })
     
-    # Registro de modulos de detalle — patron eager antes de CajaModal ----
-    DetalleCliente(          id = "detalle_activas",        dat, usr, trigger_update)
-    DetalleClienteRecuperar( id = "detalle_recuperar",      dat, usr, trigger_update)
-    DetalleClienteRecuperado(id = "detalle_recuperadas",    dat, usr, trigger_update)
-    DetalleClienteNuevo(     id = "detalle_nuevas",         dat, usr, trigger_update)
+    # Registro de modulos de detalle con dataframes pre-filtrados ----
+    DetalleCliente(          id = "detalle_activas",   dat = df_activas,   usr, trigger_update)
+    DetalleClienteRecuperar( id = "detalle_recuperar", dat = df_recuperar, usr, trigger_update)
+    DetalleClienteNuevo(     id = "detalle_nuevas",    dat = df_nuevas,    usr, trigger_update)
     DashboardLeads(          id = "detalle_leads",          dat_leads)
     DashboardOportunidades(  id = "detalle_oportunidades",  dat_oportunidades, usr)
     Cohortes(                id = "detalle_cohortes",       data_tx = dat_c)
@@ -283,74 +301,57 @@ ResumenTotal <- function(id, dat, dat_t, dat_c, dat_leads, dat_oportunidades, da
     )
     
     # Cajas KPI UC ----
+    
     CajaModal("kpi_activas",
-              valor         = reactive(html_valor(val_activas(), formato = "entero")),
-              formato       = "entero",
-              texto         = "Clientes Activos",
-              icono         = "users",
-              colores       = c(fondo = "white"),
-              mostrar_boton = TRUE,
-              titulo_modal  = "Detalle \u2014 Clientes Activos",
-              icono_modal   = "users",
+              valor           = reactive(html_valor(val_activas(), formato = "entero")),
+              formato         = "entero",
+              texto           = "Clientes Activos",
+              icono           = "users",
+              colores         = c(fondo = "white"),
+              mostrar_boton   = TRUE,
+              titulo_modal    = "Detalle \u2014 Clientes Activos",
+              icono_modal     = "users",
               contenido_modal = function() DetalleClienteUI(ns("detalle_activas")),
               footer = reactive(paste0(
-                "Clientes con compras regulares clasificados como activos ",
-                "seg\u00fan la segmentaci\u00f3n del ", format(corte_mes(), "%d/%m/%Y"), "."
+                "UC clasificadas como CLIENTE en la segmentaci\u00f3n del ",
+                format(corte_mes(), "%d/%m/%Y"), "."
               )),
               footer_class = "caja-modal-footer"
     )
     
     CajaModal("kpi_recuperar",
-              valor         = reactive(html_valor(val_recuperar(), formato = "entero")),
-              formato       = "entero",
-              texto         = "Clientes a Recuperar",
-              icono         = "user-clock",
-              colores       = c(fondo = "white"),
-              mostrar_boton = TRUE,
-              titulo_modal  = "Detalle \u2014 Clientes a Recuperar",
-              icono_modal   = "user-clock",
+              valor           = reactive(html_valor(val_recuperar(), formato = "entero")),
+              formato         = "entero",
+              texto           = "Clientes a Recuperar",
+              icono           = "user-clock",
+              colores         = c(fondo = "white"),
+              mostrar_boton   = TRUE,
+              titulo_modal    = "Detalle \u2014 Clientes a Recuperar",
+              icono_modal     = "user-clock",
               contenido_modal = function() DetalleClienteRecuperarUI(ns("detalle_recuperar")),
               footer = reactive(paste0(
-                "Clientes que han dejado de comprar y requieren gesti\u00f3n comercial ",
-                "seg\u00fan la segmentaci\u00f3n del ", format(corte_mes(), "%d/%m/%Y"), "."
-              )),
-              footer_class = "caja-modal-footer"
-    )
-    
-    CajaModal("kpi_recuperadas",
-              valor         = reactive(html_valor(val_recuperadas(), formato = "entero")),
-              formato       = "entero",
-              texto         = "Clientes Recuperados",
-              icono         = "user-check",
-              colores       = c(fondo = "white"),
-              mostrar_boton = TRUE,
-              titulo_modal  = "Detalle \u2014 Clientes Recuperados",
-              icono_modal   = "user-check",
-              contenido_modal = function() DetalleClienteRecuperadoUI(ns("detalle_recuperadas")),
-              footer = reactive(paste0(
-                "Clientes que estaban por recuperar y ya realizaron una compra en ",
-                .mes_es(Sys.Date()), ". Quedar\u00e1n activos en la pr\u00f3xima segmentaci\u00f3n."
+                "UC clasificadas como CLIENTE A RECUPERAR en la segmentaci\u00f3n del ",
+                format(corte_mes(), "%d/%m/%Y"), "."
               )),
               footer_class = "caja-modal-footer"
     )
     
     CajaModal("kpi_nuevas",
-              valor         = reactive(html_valor(val_nuevas(), formato = "entero")),
-              formato       = "entero",
-              texto         = "Clientes Nuevos",
-              icono         = "user-plus",
-              colores       = c(fondo = "white"),
-              mostrar_boton = TRUE,
-              titulo_modal  = "Detalle \u2014 Clientes Nuevos",
-              icono_modal   = "user-plus",
+              valor           = reactive(html_valor(val_nuevas(), formato = "entero")),
+              formato         = "entero",
+              texto           = "Clientes Nuevos",
+              icono           = "user-plus",
+              colores         = c(fondo = "white"),
+              mostrar_boton   = TRUE,
+              titulo_modal    = "Detalle \u2014 Clientes Nuevos",
+              icono_modal     = "user-plus",
               contenido_modal = function() DetalleClienteNuevoUI(ns("detalle_nuevas")),
               footer = reactive(paste0(
-                "Clientes que compraron por primera vez en ", .mes_es(Sys.Date()),
-                " sin ning\u00fan registro previo en el historial comercial de Racaf\u00e9."
+                "UC con factura en ", .mes_es(Sys.Date()),
+                " sin registro previo en CRMNALSEGR ni en el historial de facturaci\u00f3n."
               )),
               footer_class = "caja-modal-footer"
     )
-    
     # Cajas KPI comercial ----
     CajaModal("kpi_leads",
               valor         = reactive(html_valor(val_leads(), formato = "entero")),

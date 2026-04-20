@@ -18,7 +18,7 @@ Choices <- function() {
   direccion_cardinalidad <- c("","NORTE","SUR","ESTE","OESTE")
   
   list(
-    personas = Unicos(clientes_data$Asesor),
+    personas = c(Unicos(clientes_data$Asesor), "SIN DATO"),
     segmento = Unicos(clientes_data$Segmento),
     linneg = Unicos(productos$LinNeg),
     categoria = Unicos(c(productos$Categoria)),

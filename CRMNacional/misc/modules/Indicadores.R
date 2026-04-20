@@ -1,3 +1,55 @@
+# Orden canonico de claves de BD (unica fuente de verdad compartida entre modulos) ----
+.IND_CLAVES_CANON <- c(
+  "TRM", "PrecioNY", "PrecioCarga", "Diferencial", "UGCRacafe",
+  "PrecioBolsa", "PrecioFNC", "UGCFNC",
+  "CALConsumo", "COMConsumo", "CALPasilla", "COMMolidos",
+  "COMSoluble", "CALRipio", "COMRipio", "COMRobusta"
+)
+
+# Etiquetas cortas para tabla Indicadores (sin unidades), indexadas por orden canonico ----
+.IND_NOMBRES_CORTOS <- c(
+  "TRM"         = "TRM (Hoja de trabajo)",
+  "PrecioNY"    = "Precio NYC (HT)",
+  "PrecioCarga" = "Precio Carga (Promedio de \u00FAltimas entradas del d\u00EDa)",
+  "Diferencial" = "Diferencial de Compra (HT)",
+  "UGCRacafe"   = "Costo UGQ Racaf\u00E9",
+  "PrecioBolsa" = "Precio Bolsa (FNC)",
+  "PrecioFNC"   = "Precio Carga (FNC)",
+  "UGCFNC"      = "Costo UGQ (FNC)",
+  "CALConsumo"  = "Precio Consumo (Calculadora)",
+  "COMConsumo"  = "Precio Consumo (Compras)",
+  "CALPasilla"  = "Precio Pasilla (Calculadora)",
+  "COMMolidos"  = "Precio Molidos (Compras)",
+  "COMSoluble"  = "Precio Soluble (Compras)",
+  "CALRipio"    = "Precio Ripio (Calculadora)",
+  "COMRipio"    = "Precio Ripio (Compras)",
+  "COMRobusta"  = "Precio Robusta (Compras)"
+)[.IND_CLAVES_CANON]
+
+# Etiquetas largas para tabla Comparacion (con unidades), indexadas por orden canonico ----
+.IND_NOMBRES_DB <- c(
+  "TRM"         = "TRM ($COP/USD)",
+  "PrecioNY"    = "Precio NYC (HT) (\u00A2USD/lb)",
+  "PrecioCarga" = "Precio Carga ($COP/carga)",
+  "Diferencial" = "Diferencial de Compra (HT) ($USD/lb)",
+  "UGCRacafe"   = "UGC Racafe ($COP/kg)",
+  "PrecioBolsa" = "Precio Bolsa FNC (\u00A2USD/lb)",
+  "PrecioFNC"   = "Precio FNC ($COP/carga)",
+  "UGCFNC"      = "UGC FNC ($COP/kg)",
+  "CALConsumo"  = "CAL Consumo ($COP/kg)",
+  "COMConsumo"  = "COM Consumo ($COP/kg)",
+  "CALPasilla"  = "CAL Pasilla ($COP/kg)",
+  "COMMolidos"  = "COM Molidos ($COP/kg)",
+  "COMSoluble"  = "COM Soluble ($COP/kg)",
+  "CALRipio"    = "CAL Ripio ($COP/kg)",
+  "COMRipio"    = "COM Ripio ($COP/kg)",
+  "COMRobusta"  = "COM Robusta ($COP/kg)"
+)[.IND_CLAVES_CANON]
+
+# Diccionario inverso: label corto -> clave BD (derivado de .IND_NOMBRES_CORTOS, no copiado) ----
+.IND_NOMBRES_INV <- setNames(names(.IND_NOMBRES_CORTOS), unname(.IND_NOMBRES_CORTOS))
+
+
 # Consulta e impresion de Indicadores ----
 IndicadoresUI <- function(id) {
   ns <- NS(id)
@@ -12,38 +64,23 @@ IndicadoresUI <- function(id) {
 Indicadores <- function(id, dat) {
   moduleServer(id, function(input, output, session) {
     
-    # Diccionario canonico de nombres legibles (orden = orden de visualizacion)
-    nombres_items <- c(
-      "TRM"         = "TRM (Hoja de trabajo)",
-      "PrecioNY"    = "Precio NYC (HT)",
-      "PrecioCarga" = "Precio Carga (Promedio de últimas entradas del día)",
-      "Diferencial" = "Diferencial de Compra (HT)",
-      "UGCRacafe"   = "Costo UGQ Racafé",
-      "PrecioBolsa" = "Precio Bolsa (FNC)",
-      "PrecioFNC"   = "Precio Carga (FNC)",
-      "UGCFNC"      = "Costo UGQ (FNC)",
-      "CALConsumo"  = "Precio Consumo (Calculadora)",
-      "COMConsumo"  = "Precio Consumo (Compras)",
-      "CALPasilla"  = "Precio Pasilla (Calculadora)",
-      "COMMolidos"  = "Precio Molidos (Compras)",
-      "COMSoluble"  = "Precio Soluble (Compras)",
-      "CALRipio"    = "Precio Ripio (Calculadora)",
-      "COMRipio"    = "Precio Ripio (Compras)",
-      "COMRobusta"  = "Precio Robusta (Compras)"
-    )
-    
-    # Datos del dia anterior: seleccion explicita por nombre (evita exclusion por rango posicional)
+    # Datos del dia anterior: pivot sobre claves canonicas, recodificado a etiquetas cortas
     anterior <- CargarDatos("CRMINDICADORES") %>%
       mutate(Fecha = as.Date(FechaActualizacion)) %>%
       filter(Fecha == Sys.Date() - 1) %>%
-      select(all_of(names(nombres_items))) %>%
-      pivot_longer(cols = all_of(names(nombres_items)), names_to = "Item", values_to = "anterior") %>%
-      mutate(Item = dplyr::recode(Item, !!!nombres_items))
+      select(all_of(.IND_CLAVES_CANON)) %>%
+      pivot_longer(
+        cols      = all_of(.IND_CLAVES_CANON),
+        names_to  = "Item",
+        values_to = "anterior"
+      ) %>%
+      mutate(Item = dplyr::recode(Item, !!!.IND_NOMBRES_CORTOS))
     
     output$tabla_indicadores <- render_gt({
       req(dat())
       
-      orden_items <- unname(nombres_items)
+      # Orden de visualizacion derivado del diccionario canonico
+      orden_items <- unname(.IND_NOMBRES_CORTOS)
       
       tabla <- dat() %>%
         select(-last_updated) %>%
@@ -84,14 +121,20 @@ Indicadores <- function(id, dat) {
         "/home/htamara/6_IndustriaNacional/CRM Cliente Nacional/CRMNacional/data/cafexasignar.rds"
       )
       texto <- FormatearTexto(
-        paste("**Posición con cierre al**", format(Unicos(t1$Fecha), "%d %b %Y")),
+        paste("**Posici\u00F3n con cierre al**", format(Unicos(t1$Fecha), "%d %b %Y")),
         tamano_pct = 0.8
       )
       t1 %>%
         filter(Tipo_Negocio == "Disponible") %>%
         select(Tipo_Negocio, Total_Sacos, PrecioxCarga) %>%
-        pivot_longer(cols = Total_Sacos:PrecioxCarga, names_to = "name", values_to = "value") %>%
-        mutate(name = recode(name, "Total_Sacos" = "Sacos", "PrecioxCarga" = "Precio de Carga")) %>%
+        pivot_longer(
+          cols      = Total_Sacos:PrecioxCarga,
+          names_to  = "name",
+          values_to = "value"
+        ) %>%
+        mutate(
+          name = recode(name, "Total_Sacos" = "Sacos", "PrecioxCarga" = "Precio de Carga")
+        ) %>%
         select(Tipo_Negocio = name, Total_Sacos = value) %>%
         gt() %>%
         fmt_number(columns = Total_Sacos, decimals = 2) %>%
@@ -104,7 +147,9 @@ Indicadores <- function(id, dat) {
           locations = cells_body(columns = Total_Sacos)
         ) %>%
         tab_style(
-          style     = cell_borders(sides = c("top", "bottom", "left", "right"), color = "transparent"),
+          style     = cell_borders(
+            sides = c("top", "bottom", "left", "right"), color = "transparent"
+          ),
           locations = cells_body()
         ) %>%
         gt_minimal_style() %>%
@@ -115,7 +160,7 @@ Indicadores <- function(id, dat) {
     output$last_update <- renderUI({
       req(dat())
       FormatearTexto(
-        paste("Última actualización:", dat()$last_updated[1]) %>% HTML,
+        paste("Ultima actualizacion:", dat()$last_updated[1]) %>% HTML,
         tamano_pct = 0.6
       )
     })
@@ -130,69 +175,34 @@ Indicadores <- function(id, dat) {
 
 
 # Comparacion de Indicadores ----
-
-# Diccionario canonico DB -> label de visualizacion (compartido entre UI y server)
-.IND_NOMBRES_DB <- c(
-  "PrecioBolsa" = "Precio Bolsa FNC (¢USD/lb)",
-  "TRM"         = "TRM ($COP/USD)",
-  "PrecioFNC"   = "Precio FNC ($COP/carga)",
-  "UGCFNC"      = "UGC FNC ($COP/kg)",
-  "PrecioNY"    = "Precio NYC (HT) (¢USD/lb)",
-  "PrecioCarga" = "Precio Carga ($COP/carga)",
-  "Diferencial" = "Diferencial de Compra (HT) ($USD/lb)",
-  "UGCRacafe"   = "UGC Racafe ($COP/kg)",
-  "CALConsumo"  = "CAL Consumo ($COP/kg)",
-  "COMConsumo"  = "COM Consumo ($COP/kg)",
-  "CALPasilla"  = "CAL Pasilla ($COP/kg)",
-  "COMMolidos"  = "COM Molidos ($COP/kg)",
-  "COMSoluble"  = "COM Soluble ($COP/kg)",
-  "CALRipio"    = "CAL Ripio ($COP/kg)",
-  "COMRipio"    = "COM Ripio ($COP/kg)",
-  "COMRobusta"  = "COM Robusta ($COP/kg)"
-)
-
-# Diccionario inverso: label de data_ind() -> nombre de columna en BD
-.IND_NOMBRES_INV <- c(
-  "TRM (Hoja de trabajo)"                              = "TRM",
-  "Precio NYC (HT)"                                    = "PrecioNY",
-  "Precio Carga (Promedio de últimas entradas del día)" = "PrecioCarga",
-  "Diferencial de Compra (HT)"                         = "Diferencial",
-  "Costo UGQ Racafé"                                   = "UGCRacafe",
-  "Precio Bolsa (FNC)"                                 = "PrecioBolsa",
-  "Precio Carga (FNC)"                                 = "PrecioFNC",
-  "Costo UGQ (FNC)"                                    = "UGCFNC",
-  "Precio Consumo (Calculadora)"                       = "CALConsumo",
-  "Precio Consumo (Compras)"                           = "COMConsumo",
-  "Precio Pasilla (Calculadora)"                       = "CALPasilla",
-  "Precio Molidos (Compras)"                           = "COMMolidos",
-  "Precio Soluble (Compras)"                           = "COMSoluble",
-  "Precio Ripio (Calculadora)"                         = "CALRipio",
-  "Precio Ripio (Compras)"                             = "COMRipio",
-  "Precio Robusta (Compras)"                           = "COMRobusta"
-)
-
 ComparacionIndicadoresUI <- function(id) {
   ns <- NS(id)
   tagList(
-    # Caja de filtros con estilo tsk-filtros-wrap (consistente con modulo Tareas)
+    # Panel de filtros con clase consistente con modulo Tareas
     tags$div(
       class = "tsk-filtros-wrap",
       fluidRow(
         column(3,
                tags$div(class = "tsk-filtros-label", "Fecha Inicial"),
-               dateInput(ns("fecha_anterior"), label = NULL, value = Sys.Date() - 1,
-                         format = "yyyy-mm-dd", language = "es", width = "100%")
+               dateInput(
+                 ns("fecha_anterior"), label = NULL, value = Sys.Date() - 1,
+                 format = "yyyy-mm-dd", language = "es", width = "100%"
+               )
         ),
         column(3,
                tags$div(class = "tsk-filtros-label", "Fecha Final"),
-               dateInput(ns("fecha_actual"), label = NULL, value = Sys.Date(),
-                         format = "yyyy-mm-dd", language = "es", width = "100%")
+               dateInput(
+                 ns("fecha_actual"), label = NULL, value = Sys.Date(),
+                 format = "yyyy-mm-dd", language = "es", width = "100%"
+               )
         ),
         column(3,
                tags$div(class = "tsk-filtros-label", "Accion"),
-               actionButton(ns("comparar"), "Comparar Indicadores",
-                            icon = icon("exchange-alt"), class = "btn-danger",
-                            style = "width:100%;")
+               actionButton(
+                 ns("comparar"), "Comparar Indicadores",
+                 icon = icon("exchange-alt"), class = "btn-danger",
+                 style = "width:100%;"
+               )
         )
       )
     ),
@@ -234,12 +244,14 @@ ComparacionIndicadores <- function(id, data_ind) {
       req(input$fecha_anterior, input$fecha_actual)
       es_hoy <- input$fecha_actual == Sys.Date()
       
-      # Datos de fecha actual: cache en tiempo real o historico
+      # Datos de fecha actual: cache en tiempo real o historico segun flag
       if (es_hoy) {
         datos_actual_raw <- data_ind()
         if (is.null(datos_actual_raw) || nrow(datos_actual_raw) == 0) {
-          showNotification("No se pudieron cargar los datos del caché para hoy",
-                           type = "error", duration = 5)
+          showNotification(
+            "No se pudieron cargar los datos del cache para hoy",
+            type = "error", duration = 5
+          )
           return(NULL)
         }
         datos_actual  <- .normalizar_cache(datos_actual_raw)
@@ -253,10 +265,10 @@ ComparacionIndicadores <- function(id, data_ind) {
           )
           return(NULL)
         }
-        fuente_actual <- "Base de datos histórica"
+        fuente_actual <- "Base de datos historica"
       }
       
-      # Datos de fecha anterior: siempre historico
+      # Datos de fecha anterior: siempre desde historico
       datos_anterior <- .cargar_historico(input$fecha_anterior)
       if (nrow(datos_anterior) == 0) {
         showNotification(
@@ -266,30 +278,32 @@ ComparacionIndicadores <- function(id, data_ind) {
         return(NULL)
       }
       
-      # Construccion de tabla comparativa sobre columnas canonicas del diccionario
-      cols_bd <- names(.IND_NOMBRES_DB)
-      cols_disponibles <- cols_bd[
-        cols_bd %in% names(datos_anterior) & cols_bd %in% names(datos_actual)
+      # Construccion de tabla comparativa sobre claves canonicas disponibles en ambas fechas
+      cols_disponibles <- .IND_CLAVES_CANON[
+        .IND_CLAVES_CANON %in% names(datos_anterior) &
+          .IND_CLAVES_CANON %in% names(datos_actual)
       ]
       
       comparacion <- tibble(Indicador = cols_disponibles) %>%
         mutate(
-          Nombre_Indicador = .IND_NOMBRES_DB[Indicador],
-          Valor_Anterior = map_dbl(Indicador, ~ {
+          Nombre_Indicador     = .IND_NOMBRES_DB[Indicador],
+          Valor_Anterior       = map_dbl(Indicador, ~ {
             val <- as.numeric(datos_anterior[[.x]])
             ifelse(length(val) == 0 || is.na(val), NA_real_, val)
           }),
-          Valor_Actual = map_dbl(Indicador, ~ {
+          Valor_Actual         = map_dbl(Indicador, ~ {
             val <- as.numeric(datos_actual[[.x]])
             ifelse(length(val) == 0 || is.na(val), NA_real_, val)
           }),
           Diferencia_Absoluta  = Valor_Actual - Valor_Anterior,
           Variacion_Porcentual = Variacion(ini = Valor_Anterior, fin = Valor_Actual)
         ) %>%
-        select(Nombre_Indicador, Valor_Anterior, Valor_Actual,
-               Diferencia_Absoluta, Variacion_Porcentual)
+        select(
+          Nombre_Indicador, Valor_Anterior, Valor_Actual,
+          Diferencia_Absoluta, Variacion_Porcentual
+        )
       
-      showNotification("Comparación completada exitosamente", type = "message", duration = 3)
+      showNotification("Comparacion completada exitosamente", type = "message", duration = 3)
       
       list(datos = comparacion, fuente_actual = fuente_actual, es_hoy = es_hoy)
     })
@@ -303,16 +317,17 @@ ComparacionIndicadores <- function(id, data_ind) {
       if (nrow(datos) == 0) {
         return(
           data.frame(Mensaje = "No hay datos disponibles para comparar") %>%
-            gt() %>% tab_options(table.width = pct(100))
+            gt() %>%
+            tab_options(table.width = pct(100))
         )
       }
       
       datos %>%
         gt() %>%
         tab_header(
-          title    = md("**Comparación de Indicadores**"),
+          title    = md("**Comparaci\u00F3n de Indicadores**"),
           subtitle = md(paste0(
-            "Comparación entre **", format(input$fecha_anterior, "%d/%b/%Y"),
+            "Comparaci\u00F3n entre **", format(input$fecha_anterior, "%d/%b/%Y"),
             "** y **", format(input$fecha_actual, "%d/%b/%Y"), "**"
           ))
         ) %>%
@@ -321,7 +336,7 @@ ComparacionIndicadores <- function(id, data_ind) {
           Valor_Anterior       = "Valor Anterior",
           Valor_Actual         = "Valor Vigente",
           Diferencia_Absoluta  = "Diferencia Absoluta",
-          Variacion_Porcentual = "Variación %"
+          Variacion_Porcentual = "Variaci\u00F3n %"
         ) %>%
         fmt_currency(
           columns  = c(Valor_Anterior, Valor_Actual, Diferencia_Absoluta),

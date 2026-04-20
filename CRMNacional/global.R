@@ -1,5 +1,6 @@
 # Configuración del sistema
 Sys.setlocale("LC_TIME", "es_ES.UTF-8")
+Sys.setenv(LANG = "es_CO.UTF-8")
 options(
   dplyr.summarise.inform = FALSE,
   repos = c(CRAN = "https://cloud.r-project.org")
