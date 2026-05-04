@@ -8,7 +8,6 @@ TablaDetalleDatUI <- function(id) {
     reactable::reactableOutput(ns("tabla"))
   )
 }
-
 TablaDetalleDat <- function(id, dat) {
   moduleServer(id, function(input, output, session) {
     
@@ -79,8 +78,6 @@ TablaDetalleDat <- function(id, dat) {
 PresupuestoUI <- function(id) {
   ns <- NS(id)
   tagList(
-    # Header informativo: contexto activo del modulo
-    # uiOutput(ns("header_contexto")),
     # KPIs principales
     fluidRow(
       column(3, racafeModulos::CajaModalUI(ns("kpi_cumpl_sacos_ytd"))),
@@ -127,14 +124,14 @@ PresupuestoUI <- function(id) {
     # Tabla unificada: cumplimiento + proyeccion por dimension — colapsada por defecto
     fluidRow(
       bs4Dash::bs4Card(
-        title = "Cumplimiento y Proyección por Dimensión", status = "white",
+        title = "Cumplimiento y Proyeccion por Dimension", status = "white",
         solidHeader = TRUE, width = 12, collapsible = TRUE, collapsed = TRUE,
         fluidRow(
           column(10,
                  racafe::BotonesRadiales(
                    inputId = "dim_breakdown",
                    choices = c(
-                     "Línea de Negocio" = "linneg", "Segmento" = "segmento",
+                     "Linea de Negocio" = "linneg", "Segmento" = "segmento",
                      "Asesor" = "asesor", "Departamento" = "departamento",
                      "Municipio" = "municipio", "Unidad Comercial" = "unidadcomercial"
                    ),
@@ -166,7 +163,7 @@ PresupuestoUI <- function(id) {
           ),
           column(6,
                  bs4Dash::bs4Card(
-                   title = "Velocidad de Ejecución vs Requerida",
+                   title = "Velocidad de Ejecucion vs Requerida",
                    status = "white", solidHeader = FALSE, width = 12,
                    collapsible = TRUE, elevation = 1,
                    fluidRow(
@@ -188,18 +185,16 @@ PresupuestoUI <- function(id) {
     )
   )
 }
-Presupuesto <- function(id, dat) {
+Presupuesto <- function(id, dat, clientes_raw) {
   moduleServer(id, function(input, output, session) {
     
     # Constantes ----
-    .MESES <- c(
-      "ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO",
-      "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE"
-    )
+    .MESES <- c("ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO",
+                "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE")
     
     # Escala semaforica unificada
     .SEMAFORO <- list(
-      umbral_exceso  = 1.00, umbral_alto = 0.80, umbral_bajo = 0.50,
+      umbral_exceso  = 1.00, umbral_alto    = 0.80, umbral_bajo    = 0.50,
       col_azul       = "#1D4ED8", col_verde    = "#15803D",
       col_amarillo   = "#B45309", col_rojo     = "#B91C1C",
       fondo_azul     = "#EFF6FF", fondo_verde    = "#F0FDF4",
@@ -213,7 +208,7 @@ Presupuesto <- function(id, dat) {
     
     # Helpers ----
     
-    # Helper ETL: normalizacion de kilos por linea de negocio (evita triplicacion)
+    # Helper ETL: normalizacion de kilos por linea de negocio
     .normalizar_kilos <- function(df) {
       df %>% mutate(
         Margen    = ifelse(is.infinite(Margen), NA, Margen),
@@ -232,14 +227,13 @@ Presupuesto <- function(id, dat) {
     }
     .dim_lbl <- function(dim) {
       switch(dim,
-             linneg = "Línea de Negocio", segmento = "Segmento", asesor = "Asesor",
+             linneg = "Linea de Negocio", segmento = "Segmento", asesor = "Asesor",
              departamento = "Departamento", municipio = "Municipio",
              unidadcomercial = "Unidad Comercial"
       )
     }
     
-    # Helper semaforo unificado — reemplaza cinco helpers anteriores
-    # tipo: "fondo" | "fondo_na" | "texto_na" | "emoji" | "tramo"
+    # Helper semaforo: retorna color o emoji segun tipo y valor
     .semaforo <- function(v, tipo = "fondo_na") {
       s <- .SEMAFORO
       switch(tipo,
@@ -291,7 +285,7 @@ Presupuesto <- function(id, dat) {
       )
     }
     
-    # Reemplazo local de gt_pct_style con escala de 4 tramos
+    # Estilos semaforo para columnas de porcentaje en tabla gt
     gt_pct_style_semaforo <- function(gt_table, ...) {
       cols <- rlang::ensyms(...)
       s    <- .SEMAFORO
@@ -375,16 +369,17 @@ Presupuesto <- function(id, dat) {
         )
     }
     
-    # Presupuesto mensual: ultimo proceso del anio por cliente/linea, cruzado con dat()
-    obtener_presupuesto <- function(data, periodo) {
-      CargarDatos("CRMNALCLIENTE") %>%
+    # Presupuesto mensual: ultimo proceso del anio por cliente/linea
+    obtener_presupuesto <- function(data, clientes, periodo) {
+      clientes() %>%
         filter(year(FecProceso) == year(Sys.Date())) %>%
         group_by(LinNegCod, CliNitPpal) %>%
         filter(FecProceso == max(FecProceso)) %>%
+        slice(1L) %>%
         ungroup() %>%
         inner_join(
-          data %>% select(LinNegCod, Segmento, Asesor, Responsable) %>% distinct(),
-          by = join_by(LinNegCod, Segmento, Asesor, Responsable)
+          data %>% distinct(LinNegCod, Segmento, Asesor),
+          by = join_by(LinNegCod, Segmento, Asesor)
         ) %>%
         group_by(LinNegCod, CliNitPpal, Segmento) %>%
         summarise(
@@ -395,16 +390,17 @@ Presupuesto <- function(id, dat) {
         crossing(Periodo = periodo, Fecha = .MESES)
     }
     
-    # Presupuesto anual con dimensiones extendidas
-    obtener_presupuesto_dim <- function(data, periodo) {
-      CargarDatos("CRMNALCLIENTE") %>%
+    # Snapshot de presupuesto con dimensiones extendidas
+    obtener_presupuesto_dim <- function(data, clientes, periodo) {
+      clientes() %>%
         filter(year(FecProceso) == year(Sys.Date())) %>%
         group_by(LinNegCod, CliNitPpal) %>%
         filter(FecProceso == max(FecProceso)) %>%
+        slice(1L) %>%
         ungroup() %>%
         inner_join(
-          data %>% select(LinNegCod, Segmento, Asesor, Responsable) %>% distinct(),
-          by = join_by(LinNegCod, Segmento, Asesor, Responsable)
+          data %>% distinct(LinNegCod, Segmento, Asesor),
+          by = join_by(LinNegCod, Segmento, Asesor)
         ) %>%
         group_by(
           CliNitPpal, LinNegCod, LinNeg = LinNegocio, Segmento,
@@ -448,15 +444,13 @@ Presupuesto <- function(id, dat) {
     }
     
     # Metricas de cumplimiento y proyeccion agregadas por dimension
-    # Para unidadcomercial (es_multi=TRUE): ppto_dim no tiene RazSoc — se agrupa por
-    # CliNitPpal+LinNegCod (clave natural) y luego se enriquece desde datos_dim.
     agregar_por_dimension <- function(datos_dim, ppto_dim, dim_cols) {
       cal        <- calendario_r()
       mes_actual <- cal$mes_actual
       meses_rest <- cal$meses_rest
       es_multi   <- length(dim_cols) > 1
       
-      # Columnas de agrupacion disponibles en ppto_dim (no tiene RazSoc)
+      # Claves de agrupacion disponibles en ppto_dim (no tiene RazSoc)
       ppto_dim_cols <- if (es_multi) c("CliNitPpal", "LinNegCod") else dim_cols
       
       .group_by_dims <- function(df) {
@@ -493,7 +487,7 @@ Presupuesto <- function(id, dat) {
           .groups    = "drop"
         )
       
-      # ppto_ag se agrega por claves disponibles en ppto_dim
+      # Presupuesto agregado con metricas mensuales y YTD derivadas
       ppto_ag <- ppto_dim %>%
         .group_by_ppto() %>%
         summarise(
@@ -508,72 +502,60 @@ Presupuesto <- function(id, dat) {
           Ppto_Margen_YTD = Ppto_Margen_Anual * mes_actual / 12
         )
       
-      # Para unidadcomercial: enriquecer ejec con dim_cols luego hacer join con ppto por clave
+      # Calculo de metricas de cumplimiento, ritmo y proyeccion
+      .calcular_metricas <- function(df) {
+        df %>% mutate(
+          across(c(Sacos_YTD, Margen_YTD, Sacos_Mes, Margen_Mes), ~ coalesce(.x, 0)),
+          Cumpl_Sacos_YTD     = SiError_0(Sacos_YTD  / Ppto_Sacos_YTD),
+          Cumpl_Margen_YTD    = SiError_0(Margen_YTD / Ppto_Margen_YTD),
+          Cumpl_Sacos_Mes     = SiError_0(Sacos_Mes  / Ppto_Sacos_Mes),
+          Cumpl_Margen_Mes    = SiError_0(Margen_Mes / Ppto_Margen_Mes),
+          Brecha_Sacos        = Sacos_YTD  - Ppto_Sacos_YTD,
+          Brecha_Margen       = Margen_YTD - Ppto_Margen_YTD,
+          Ritmo_Sacos_Actual  = SiError_0(Sacos_YTD  / pmax(mes_actual, 1)),
+          Ritmo_Margen_Actual = SiError_0(Margen_YTD / pmax(mes_actual, 1)),
+          Ritmo_Sacos_Req     = SiError_0(
+            (Ppto_Sacos_Anual  - Sacos_YTD)  / pmax(meses_rest, 1)
+          ),
+          Ritmo_Margen_Req    = SiError_0(
+            (Ppto_Margen_Anual - Margen_YTD) / pmax(meses_rest, 1)
+          ),
+          Meses_Restantes     = meses_rest,
+          Meta_Mensual_Sacos  = Ritmo_Sacos_Req,
+          Meta_Mensual_Margen = Ritmo_Margen_Req,
+          Proyeccion_Sacos    = Sacos_YTD  + Ritmo_Sacos_Actual  * meses_rest,
+          Proyeccion_Margen   = Margen_YTD + Ritmo_Margen_Actual * meses_rest,
+          Prob_Sacos          = SiError_0(Proyeccion_Sacos  / Ppto_Sacos_Anual),
+          Prob_Margen         = SiError_0(Proyeccion_Margen / Ppto_Margen_Anual)
+        ) %>%
+          arrange(desc(Sacos_YTD))
+      }
+      
       if (es_multi) {
         ejec_base <- ejec_ytd %>%
           .join_by_dims(ejec_mes) %>%
           mutate(across(c(Sacos_YTD, Margen_YTD, Sacos_Mes, Margen_Mes), ~ coalesce(.x, 0)))
-        
-        # Recuperar CliNitPpal y LinNegCod desde datos_dim para poder joinear con ppto_ag
+        # Recuperar claves para joinear con ppto_ag
         dim_keys <- datos_dim %>%
           select(all_of(c(dim_cols, "CliNitPpal", "LinNegCod"))) %>%
           distinct()
-        
         ejec_base %>%
           left_join(dim_keys, by = dim_cols) %>%
           .join_by_ppto(ppto_ag) %>%
-          mutate(
-            Cumpl_Sacos_YTD     = SiError_0(Sacos_YTD  / Ppto_Sacos_YTD),
-            Cumpl_Margen_YTD    = SiError_0(Margen_YTD / Ppto_Margen_YTD),
-            Cumpl_Sacos_Mes     = SiError_0(Sacos_Mes  / Ppto_Sacos_Mes),
-            Cumpl_Margen_Mes    = SiError_0(Margen_Mes / Ppto_Margen_Mes),
-            Brecha_Sacos        = Sacos_YTD  - Ppto_Sacos_YTD,
-            Brecha_Margen       = Margen_YTD - Ppto_Margen_YTD,
-            Ritmo_Sacos_Actual  = SiError_0(Sacos_YTD  / pmax(mes_actual, 1)),
-            Ritmo_Margen_Actual = SiError_0(Margen_YTD / pmax(mes_actual, 1)),
-            Ritmo_Sacos_Req     = SiError_0((Ppto_Sacos_Anual  - Sacos_YTD)  / pmax(meses_rest, 1)),
-            Ritmo_Margen_Req    = SiError_0((Ppto_Margen_Anual - Margen_YTD) / pmax(meses_rest, 1)),
-            Meses_Restantes     = meses_rest,
-            Meta_Mensual_Sacos  = Ritmo_Sacos_Req,
-            Meta_Mensual_Margen = Ritmo_Margen_Req,
-            Proyeccion_Sacos    = Sacos_YTD  + Ritmo_Sacos_Actual  * meses_rest,
-            Proyeccion_Margen   = Margen_YTD + Ritmo_Margen_Actual * meses_rest,
-            Prob_Sacos          = SiError_0(Proyeccion_Sacos  / Ppto_Sacos_Anual),
-            Prob_Margen         = SiError_0(Proyeccion_Margen / Ppto_Margen_Anual)
-          ) %>%
-          arrange(desc(Sacos_YTD))
+          .calcular_metricas()
       } else {
         ppto_ag %>%
           .join_by_dims(ejec_ytd) %>%
           .join_by_dims(ejec_mes) %>%
-          mutate(
-            across(c(Sacos_YTD, Margen_YTD, Sacos_Mes, Margen_Mes), ~ coalesce(.x, 0)),
-            Cumpl_Sacos_YTD     = SiError_0(Sacos_YTD  / Ppto_Sacos_YTD),
-            Cumpl_Margen_YTD    = SiError_0(Margen_YTD / Ppto_Margen_YTD),
-            Cumpl_Sacos_Mes     = SiError_0(Sacos_Mes  / Ppto_Sacos_Mes),
-            Cumpl_Margen_Mes    = SiError_0(Margen_Mes / Ppto_Margen_Mes),
-            Brecha_Sacos        = Sacos_YTD  - Ppto_Sacos_YTD,
-            Brecha_Margen       = Margen_YTD - Ppto_Margen_YTD,
-            Ritmo_Sacos_Actual  = SiError_0(Sacos_YTD  / pmax(mes_actual, 1)),
-            Ritmo_Margen_Actual = SiError_0(Margen_YTD / pmax(mes_actual, 1)),
-            Ritmo_Sacos_Req     = SiError_0((Ppto_Sacos_Anual  - Sacos_YTD)  / pmax(meses_rest, 1)),
-            Ritmo_Margen_Req    = SiError_0((Ppto_Margen_Anual - Margen_YTD) / pmax(meses_rest, 1)),
-            Meses_Restantes     = meses_rest,
-            Meta_Mensual_Sacos  = Ritmo_Sacos_Req,
-            Meta_Mensual_Margen = Ritmo_Margen_Req,
-            Proyeccion_Sacos    = Sacos_YTD  + Ritmo_Sacos_Actual  * meses_rest,
-            Proyeccion_Margen   = Margen_YTD + Ritmo_Margen_Actual * meses_rest,
-            Prob_Sacos          = SiError_0(Proyeccion_Sacos  / Ppto_Sacos_Anual),
-            Prob_Margen         = SiError_0(Proyeccion_Margen / Ppto_Margen_Anual)
-          ) %>%
-          arrange(desc(Sacos_YTD))
+          .calcular_metricas()
       }
     }
     
     # Grafico de serie temporal ejecucion vs presupuesto con meta futura
     construir_grafico_serie <- function(
     datos_grafico, vista_acumulada, col_real, col_ppto, col_ref_na,
-    titulo_acum, titulo_mensual, label_y_acum, label_y_mensual, formato_y = "numero"
+    titulo_acum, titulo_mensual, label_y_acum, label_y_mensual,
+    formato_y = "numero"
     ) {
       mes_actual <- month(Sys.Date())
       
@@ -592,7 +574,6 @@ Presupuesto <- function(id, dat) {
       datos_grafico <- datos_grafico %>%
         mutate(acum_real = ifelse(Mes_Num <= ultimo_mes, acum_real, NA_real_))
       
-      # ejec_acum restringido al mismo criterio que acum_real (correccion punto 8)
       ejec_acum <- datos_grafico %>%
         filter(Mes_Num <= ultimo_mes, !is.na(.data[[col_real]])) %>%
         summarise(s = sum(.data[[col_real]], na.rm = TRUE)) %>%
@@ -615,9 +596,8 @@ Presupuesto <- function(id, dat) {
       if (vista_acumulada) {
         datos_plot <- datos_grafico %>%
           select(Fecha, acum_ppto, acum_real, meta_acum) %>%
-          pivot_longer(
-            c(acum_ppto, acum_real, meta_acum), names_to = "Tipo", values_to = "Valor"
-          ) %>%
+          pivot_longer(c(acum_ppto, acum_real, meta_acum),
+                       names_to = "Tipo", values_to = "Valor") %>%
           mutate(
             Tipo = dplyr::recode(Tipo,
                                  acum_ppto = "Presupuesto Acumulado",
@@ -631,9 +611,8 @@ Presupuesto <- function(id, dat) {
         titulo_g <- titulo_acum; titulo_y <- label_y_acum
       } else {
         datos_plot <- datos_grafico %>%
-          select(
-            Fecha, ppto = all_of(col_ppto), real = all_of(col_real), meta_men = meta_mensual
-          ) %>%
+          select(Fecha, ppto = all_of(col_ppto), real = all_of(col_real),
+                 meta_men = meta_mensual) %>%
           pivot_longer(c(ppto, real, meta_men), names_to = "Tipo", values_to = "Valor") %>%
           mutate(
             Tipo = dplyr::recode(Tipo,
@@ -650,11 +629,11 @@ Presupuesto <- function(id, dat) {
       
       trazas <- list(
         list(
-          tipo  = if (vista_acumulada) "Presupuesto Acumulado"    else "Presupuesto Mensual",
+          tipo  = if (vista_acumulada) "Presupuesto Acumulado" else "Presupuesto Mensual",
           color = "#52525C", dash = "dash"
         ),
         list(
-          tipo  = if (vista_acumulada) "Ejecutado Acumulado"      else "Ejecutado Mensual",
+          tipo  = if (vista_acumulada) "Ejecutado Acumulado" else "Ejecutado Mensual",
           color = "#1C398E", dash = "solid"
         ),
         list(
@@ -694,33 +673,35 @@ Presupuesto <- function(id, dat) {
     
     # Reactivos ----
     
-    # Calendario centralizado: evita multiples Sys.Date() en KPIs
+    # Calendario centralizado: evita multiples Sys.Date() dispersos
     calendario_r <- reactive({
       mes <- month(Sys.Date())
       list(mes_actual = mes, meses_rest = 13L - mes)
     })
     
-    # Generales
-    periodo_r    <- reactive({ year(max(dat()$FecFact, na.rm = TRUE)) })
-    datos_base_r <- reactive({ procesar_datos_base(dat(), periodo_r() - 1L) })
-    datos_act_r  <- reactive({ procesar_datos_base(dat(), periodo_r()) })
-    ppto_r       <- reactive({ obtener_presupuesto(data = dat(), periodo = periodo_r()) })
-    datos_dim_r  <- reactive({ procesar_datos_dim(dat(), periodo_r()) })
-    ppto_dim_r   <- reactive({ obtener_presupuesto_dim(dat(), periodo_r()) })
-    lotes_dim_r  <- reactive({ procesar_lotes_dim(dat(), periodo_r()) })
-    
-    # Datos para graficos de serie
+    # Reactivos de datos base
+    periodo_r       <- reactive({ year(max(dat()$FecFact, na.rm = TRUE)) })
+    datos_base_r    <- reactive({ procesar_datos_base(dat(), periodo_r() - 1L) })
+    datos_act_r     <- reactive({ procesar_datos_base(dat(), periodo_r()) })
+    ppto_r          <- reactive({ obtener_presupuesto(dat(), clientes_raw, periodo_r()) })
+    datos_dim_r     <- reactive({ procesar_datos_dim(dat(), periodo_r()) })
+    ppto_dim_r      <- reactive({ obtener_presupuesto_dim(dat(), clientes_raw, periodo_r()) })
+    lotes_dim_r     <- reactive({ procesar_lotes_dim(dat(), periodo_r()) })
     datos_grafico_r <- reactive({ preparar_datos_grafico(datos_act_r(), ppto_r(), periodo_r()) })
     
-    # Nombres de columnas dinamicos segun periodo
+    # Nombres de columnas dinamicos segun periodo activo
     col_names_r <- reactive({
       p  <- periodo_r()
       pa <- p - 1L
       list(
-        sacos_ant       = paste0("Sacos70_", pa),    margen_ant      = paste0("MargenFCC_", pa),
-        sacos_act       = paste0("Sacos70_", p),     margen_act      = paste0("MargenFCC_", p),
-        ppto_sacos      = paste0("PptoSS_", p),      ppto_margen     = paste0("PptoMa_", p),
-        cumpl_sacos     = paste0("CumplSS", p),      cumpl_margen    = paste0("CumplMgn", p),
+        sacos_ant       = paste0("Sacos70_", pa),
+        margen_ant      = paste0("MargenFCC_", pa),
+        sacos_act       = paste0("Sacos70_", p),
+        margen_act      = paste0("MargenFCC_", p),
+        ppto_sacos      = paste0("PptoSS_", p),
+        ppto_margen     = paste0("PptoMa_", p),
+        cumpl_sacos     = paste0("CumplSS", p),
+        cumpl_margen    = paste0("CumplMgn", p),
         acum_sacos_ant  = paste0("Acum_Sacos70_", pa),
         acum_margen_ant = paste0("Acum_MargenFCC_", pa),
         acum_ppto_ss    = paste0("Acum_PptoSS_", p),
@@ -736,8 +717,8 @@ Presupuesto <- function(id, dat) {
     
     # Breakdown por dimension seleccionada
     breakdown_r <- reactive({
-      req(datos_dim_r(), ppto_dim_r())
-      dim_cols <- if (input$dim_breakdown == "unidadcomercial") {
+      req(datos_dim_r(), ppto_dim_r(), !is.null(input$dim_breakdown))
+      dim_cols <- if (isTRUE(input$dim_breakdown == "unidadcomercial")) {
         c("RazSoc", "LinNeg")
       } else {
         .dim_col(input$dim_breakdown)
@@ -745,11 +726,11 @@ Presupuesto <- function(id, dat) {
       agregar_por_dimension(datos_dim_r(), ppto_dim_r(), dim_cols)
     })
     
-    # Datos de breakdown preparados para TablaReactable (con .dim_key y fila TOTAL)
+    # Datos de breakdown preparados para TablaReactable
     breakdown_tabla_r <- reactive({
-      req(breakdown_r())
+      req(breakdown_r(), !is.null(input$dim_breakdown))
       df    <- breakdown_r()
-      es_uc <- input$dim_breakdown == "unidadcomercial"
+      es_uc <- isTRUE(input$dim_breakdown == "unidadcomercial")
       
       cols_suma <- c(
         "Sacos_Mes", "Ppto_Sacos_Mes", "Sacos_YTD", "Ppto_Sacos_YTD",
@@ -773,8 +754,8 @@ Presupuesto <- function(id, dat) {
           .dim_key         = "TOTAL"
         )
       
-      dim_label <- .dim_lbl(input$dim_breakdown)
-      if (es_uc) {
+      # Construccion del resultado — rama captura el valor explicitamente
+      resultado <- if (es_uc) {
         df <- df %>%
           mutate(
             Sem_Sacos  = purrr::map_chr(Prob_Sacos,  ~ .semaforo(.x, "emoji")),
@@ -811,9 +792,15 @@ Presupuesto <- function(id, dat) {
             Proyeccion_Margen, Prob_Margen, Sem_Margen, Meta_Mensual_Margen
           )
       }
+      
+      resultado %>% mutate(.row_type = ifelse(.dim_key == "TOTAL", "total", ""))
+    })
+    # [DEBUG] exporta snapshot para inspeccion en consola
+    observeEvent(breakdown_tabla_r(), {
+      assign("TablaBreakdown", breakdown_tabla_r(), envir = .GlobalEnv)
     })
     
-    # KPIs derivados de datos_grafico_r — sin pasada extra sobre dat()
+    # KPIs derivados de datos_grafico_r
     kpi_sacos_r <- reactive({
       cal  <- calendario_r()
       dg   <- datos_grafico_r() %>% filter(Mes_Num <= cal$mes_actual)
@@ -834,8 +821,8 @@ Presupuesto <- function(id, dat) {
       cal        <- calendario_r()
       dg         <- datos_grafico_r()
       ejec_ytd   <- dg %>% filter(Mes_Num <= cal$mes_actual) %>%
-        summarise(s = sum(Sacos_Real,  na.rm = TRUE)) %>% pull(s)
-      ppto_anual <- dg %>% summarise(p = sum(Sacos_Ppto,  na.rm = TRUE)) %>% pull(p)
+        summarise(s = sum(Sacos_Real, na.rm = TRUE)) %>% pull(s)
+      ppto_anual <- dg %>% summarise(p = sum(Sacos_Ppto, na.rm = TRUE)) %>% pull(p)
       faltante   <- ppto_anual - ejec_ytd
       list(ritmo = SiError_0(faltante / pmax(cal$meses_rest, 1)),
            faltante = faltante, meses_rest = cal$meses_rest)
@@ -852,34 +839,6 @@ Presupuesto <- function(id, dat) {
     })
     
     # Outputs ----
-    
-    ## Header informativo: contexto activo derivado de dat() como titulo textual
-    output$header_contexto <- renderUI({
-      df      <- dat()
-      periodo <- periodo_r()
-      
-      # Extrae valores unicos limpios de una columna
-      .vals <- function(col) {
-        v <- sort(unique(col[!is.na(col) & col != "" & col != "SIN DATO"]))
-        if (length(v) == 0) "Todos" else paste(v, collapse = ", ")
-      }
-      
-      asesores  <- .vals(df$Asesor)
-      lineas    <- .vals(df$CLLinNegNo)
-      segmentos <- .vals(df$Segmento)
-      
-      titulo_txt <- paste0(
-        "Seguimiento de Presupuesto ", periodo,
-        " \u2014 ", asesores,
-        " \u00b7 ", lineas,
-        " \u00b7 ", segmentos
-      )
-      
-      tags$h4(
-        titulo_txt,
-        style = "font-weight:700; color:#1E293B; margin:0 0 12px 0; line-height:1.3;"
-      )
-    })
     
     ## Modulos KPI: CajaModal ----
     racafeModulos::CajaModal(
@@ -931,7 +890,7 @@ Presupuesto <- function(id, dat) {
     
     ## Tabla GT mensual/acumulada ----
     output$Presupuesto <- render_gt({
-      waiter_show(html = preloader2$html, color = preloader2$color)
+      waiter_show(html = preloader_calculando$html, color = preloader_calculando$color)
       periodo     <- periodo_r()
       periodo_ant <- periodo - 1L
       cn          <- col_names_r()
@@ -964,18 +923,24 @@ Presupuesto <- function(id, dat) {
         ) %>%
         arrange(Fecha) %>%
         mutate(
-          !!cn$acum_sacos_ant  := ifelse(!is.na(!!sym(cn$sacos_ant)),
-                                         cumsum(coalesce(!!sym(cn$sacos_ant),  0)), NA),
-          !!cn$acum_margen_ant := ifelse(!is.na(!!sym(cn$margen_ant)),
-                                         cumsum(coalesce(!!sym(cn$margen_ant), 0)), NA),
-          !!cn$acum_ppto_ss    := ifelse(!is.na(!!sym(cn$ppto_sacos)),
-                                         cumsum(coalesce(!!sym(cn$ppto_sacos), 0)), NA),
-          !!cn$acum_ppto_ma    := ifelse(!is.na(!!sym(cn$ppto_margen)),
-                                         cumsum(coalesce(!!sym(cn$ppto_margen), 0)), NA),
-          !!cn$acum_sacos_act  := ifelse(!is.na(!!sym(cn$sacos_act)),
-                                         cumsum(coalesce(!!sym(cn$sacos_act),  0)), NA),
-          !!cn$acum_margen_act := ifelse(!is.na(!!sym(cn$margen_act)),
-                                         cumsum(coalesce(!!sym(cn$margen_act), 0)), NA),
+          !!cn$acum_sacos_ant  := ifelse(
+            !is.na(!!sym(cn$sacos_ant)), cumsum(coalesce(!!sym(cn$sacos_ant),  0)), NA
+          ),
+          !!cn$acum_margen_ant := ifelse(
+            !is.na(!!sym(cn$margen_ant)), cumsum(coalesce(!!sym(cn$margen_ant), 0)), NA
+          ),
+          !!cn$acum_ppto_ss    := ifelse(
+            !is.na(!!sym(cn$ppto_sacos)), cumsum(coalesce(!!sym(cn$ppto_sacos), 0)), NA
+          ),
+          !!cn$acum_ppto_ma    := ifelse(
+            !is.na(!!sym(cn$ppto_margen)), cumsum(coalesce(!!sym(cn$ppto_margen), 0)), NA
+          ),
+          !!cn$acum_sacos_act  := ifelse(
+            !is.na(!!sym(cn$sacos_act)), cumsum(coalesce(!!sym(cn$sacos_act),  0)), NA
+          ),
+          !!cn$acum_margen_act := ifelse(
+            !is.na(!!sym(cn$margen_act)), cumsum(coalesce(!!sym(cn$margen_act), 0)), NA
+          ),
           !!cn$cumpl_ss_acum   := ifelse(
             !is.na(!!sym(cn$acum_sacos_act)) & !is.na(!!sym(cn$acum_ppto_ss)) &
               !!sym(cn$acum_ppto_ss) != 0,
@@ -1036,8 +1001,8 @@ Presupuesto <- function(id, dat) {
         tab_header(
           title    = md(paste0("**Seguimiento de Presupuesto ", periodo, "**")),
           subtitle = md(paste0(
-            "Comparativo mensual y acumulado de Sacos y Margen FCC vs. Presupuesto \u2014 ",
-            "Periodo anterior: ", periodo_ant
+            "Comparativo mensual y acumulado de Sacos y Margen FCC vs. Presupuesto",
+            " \u2014 Periodo anterior: ", periodo_ant
           ))
         ) %>%
         tab_spanner(label = as.character(periodo_ant), columns = 2:5) %>%
@@ -1087,7 +1052,7 @@ Presupuesto <- function(id, dat) {
               "display:inline-block;width:15px;height:15px;background-color:#F0FDF4;",
               "border:1px solid #ccc;margin-right:6px;vertical-align:middle;"
             )),
-            tags$span(paste0("Año Anterior (", periodo_ant, ")"),
+            tags$span(paste0("Anio Anterior (", periodo_ant, ")"),
                       style = "font-weight:bold;font-size:12px;"),
             tags$span(style = paste0(
               "display:inline-block;width:15px;height:15px;background-color:#F8FAFC;",
@@ -1112,14 +1077,14 @@ Presupuesto <- function(id, dat) {
             ),
             tags$span(HTML(paste0(
               "<b>Cumplimiento:</b> ",
-              "<code style='background:#f3f4f6;color:#374151;padding:1px 5px;border-radius:3px;'>",
-              "Ejecutado \u00f7 Presupuesto</code>"
+              "<code style='background:#f3f4f6;color:#374151;padding:1px 5px;",
+              "border-radius:3px;'>Ejecutado \u00f7 Presupuesto</code>"
             ))),
             tags$br(),
             tags$span(HTML(paste0(
-              "<b>Comparación con año anterior:</b> ",
-              "<code style='background:#f3f4f6;color:#374151;padding:1px 5px;border-radius:3px;'>",
-              "(Actual \u2212 Anterior) \u00f7 |Anterior|</code>"
+              "<b>Comparacion con anio anterior:</b> ",
+              "<code style='background:#f3f4f6;color:#374151;padding:1px 5px;",
+              "border-radius:3px;'>(Actual \u2212 Anterior) \u00f7 |Anterior|</code>"
             )))
           )
         ) %>%
@@ -1141,7 +1106,7 @@ Presupuesto <- function(id, dat) {
     
     ## Titulo dinamico sub-card proyeccion ----
     output$titulo_proyeccion <- renderUI({
-      paste0("Proyección de Cierre por Dimensión \u2014 ", periodo_r())
+      paste0("Proyeccion de Cierre por Dimension \u2014 ", periodo_r())
     })
     
     ## Graficos de serie temporal ----
@@ -1149,8 +1114,8 @@ Presupuesto <- function(id, dat) {
       construir_grafico_serie(
         datos_grafico_r(), input$vista_acumulada,
         "Sacos_Real", "Sacos_Ppto", "Sacos70",
-        "Ejecución vs Presupuesto \u2014 Sacos (Acumulado)",
-        "Ejecución vs Presupuesto \u2014 Sacos (Mensual)",
+        "Ejecucion vs Presupuesto \u2014 Sacos (Acumulado)",
+        "Ejecucion vs Presupuesto \u2014 Sacos (Mensual)",
         "Sacos Acumulados", "Sacos Mensuales", "numero"
       )
     })
@@ -1158,21 +1123,21 @@ Presupuesto <- function(id, dat) {
       construir_grafico_serie(
         datos_grafico_r(), input$vista_acumulada,
         "Margen_Real", "Margen_Ppto", "MargenFCC",
-        "Ejecución vs Presupuesto \u2014 Margen (Acumulado)",
-        "Ejecución vs Presupuesto \u2014 Margen (Mensual)",
+        "Ejecucion vs Presupuesto \u2014 Margen (Acumulado)",
+        "Ejecucion vs Presupuesto \u2014 Margen (Mensual)",
         "Margen Acumulado", "Margen Mensual", "dinero"
       )
     })
     
     ## Tabla breakdown: recreada al cambiar dimension ----
     
-    # Helper: colDef de dimension segun dim
+    # ColDef de columna de dimension segun dim activo
     .col_dim_def <- function(dim) {
-      es_uc <- dim == "unidadcomercial"
+      es_uc <- isTRUE(dim == "unidadcomercial")
       if (es_uc) list(
         .dim_key = reactable::colDef(show = FALSE),
-        RazSoc   = reactable::colDef(name = "Razón Social",     minWidth = 200, sticky = "left"),
-        LinNeg   = reactable::colDef(name = "Línea de Negocio", minWidth = 150, sticky = "left")
+        RazSoc   = reactable::colDef(name = "Razon Social",     minWidth = 200, sticky = "left"),
+        LinNeg   = reactable::colDef(name = "Linea de Negocio", minWidth = 150, sticky = "left")
       ) else list(
         .dim_key = reactable::colDef(name = .dim_lbl(dim), minWidth = 180, sticky = "left")
       )
@@ -1223,7 +1188,7 @@ Presupuesto <- function(id, dat) {
           format = reactable::colFormat(percent = TRUE, digits = 1),
           style  = function(v) list(color = .semaforo(v, "texto_na"), fontWeight = "700")
         ),
-        Sem_Sacos = reactable::colDef(name = "", minWidth = 35),
+        Sem_Sacos          = reactable::colDef(name = "", minWidth = 35),
         Meta_Mensual_Sacos = reactable::colDef(
           name = "Meta Mens.", minWidth = 90,
           format = reactable::colFormat(separators = TRUE, digits = 0)
@@ -1270,52 +1235,57 @@ Presupuesto <- function(id, dat) {
           format = reactable::colFormat(percent = TRUE, digits = 1),
           style  = function(v) list(color = .semaforo(v, "texto_na"), fontWeight = "700")
         ),
-        Sem_Margen = reactable::colDef(name = "", minWidth = 35),
-        Meta_Mensual_Margen = reactable::colDef(
+        Sem_Margen           = reactable::colDef(name = "", minWidth = 35),
+        Meta_Mensual_Margen  = reactable::colDef(
           name = "Meta Mens.", minWidth = 110,
           format = reactable::colFormat(prefix = "$", separators = TRUE, digits = 0)
         )
       )
     }
     
-    # Contador para id unico al recrear el modulo (inicia en 1 para evitar race condition en init)
+    # Contador de version para id unico por instancia de modulo — evita race condition
     .breakdown_ver <- reactiveVal(1L)
+    .ns_local      <- session$ns
+    
+    # Incrementa version al cambiar dimension
     observeEvent(input$dim_breakdown, {
       .breakdown_ver(.breakdown_ver() + 1L)
     }, ignoreInit = FALSE)
-    
-    .ns_local <- session$ns
     
     # UI dinamica: recrea TablaReactableUI con id unico por version
     output$tabla_breakdown_ui <- renderUI({
       ver <- .breakdown_ver()
       racafeModulos::TablaReactableUI(
         .ns_local(paste0("tabla_bd_", ver)),
+        estilo = "minimal2",
         titulo    = NULL,
         subtitulo = NULL,
         sortable  = TRUE
       )
     })
     
-    # Server: monta TablaReactable al cambiar version
-    # ignoreInit = FALSE + req(!is.null(dim)) garantiza carga inicial sin race condition
+    # Server: monta TablaReactable — unico observeEvent, sin duplicado
+    # col_specs recibe named list de colDef; columnas recibe character vector de nombres
     observeEvent(.breakdown_ver(), {
-      ver <- .breakdown_ver()
-      dim <- isolate(input$dim_breakdown)
-      req(!is.null(dim))
-      mid <- paste0("tabla_bd_", ver)
+      ver          <- .breakdown_ver()
+      dim          <- isolate(input$dim_breakdown)
+      req(!is.null(dim), nzchar(dim))
+      mid          <- paste0("tabla_bd_", ver)
+      cols_todas   <- c(.col_dim_def(dim), .cols_metricas())
+      cols_nombres <- names(cols_todas)
       
       racafeModulos::TablaReactable(
-        id = mid,
-        data = breakdown_tabla_r,
-        id_col = ".dim_key",
+        id             = mid,
+        data           = breakdown_tabla_r,
+        id_col         = ".dim_key",
         modo_seleccion = "fila",
-        sortable = TRUE,
-        searchable = TRUE,
-        page_size = 20,
-        compact = TRUE,
-        mostrar_badge = FALSE,
-        columnas = c(.col_dim_def(dim), .cols_metricas()),
+        sortable       = TRUE,
+        searchable     = TRUE,
+        page_size      = 20,
+        compact        = TRUE,
+        mostrar_badge  = FALSE,
+        col_specs      = cols_todas,
+        columnas       = cols_nombres,
         modal_titulo_fn = function(sel) {
           titulo_dim <- gsub("\\|\\|", " \u2014 ", sel$id, fixed = FALSE)
           paste0("Lotes facturados \u2014 ", titulo_dim, " \u00b7 ", isolate(periodo_r()))
@@ -1324,8 +1294,9 @@ Presupuesto <- function(id, dat) {
           dim_val <- sel$id
           dim_sel <- isolate(input$dim_breakdown)
           lotes   <- isolate(lotes_dim_r())
-          es_uc   <- dim_sel == "unidadcomercial"
+          es_uc   <- isTRUE(dim_sel == "unidadcomercial")
           
+          # Filtrado de lotes segun dimension y valor seleccionado
           lotes_fil <- if (dim_val == "TOTAL") {
             lotes
           } else if (es_uc) {
@@ -1342,6 +1313,7 @@ Presupuesto <- function(id, dat) {
             lotes %>% filter(.data[[col_dim]] == dim_val)
           }
           
+          # Agrupacion de lotes para tabla del modal
           df_modal <- lotes_fil %>%
             group_by(FecFact, PerRazSoc, CLLinNegNo, CLLotCod, Asesor, Segmento) %>%
             summarise(
@@ -1352,10 +1324,13 @@ Presupuesto <- function(id, dat) {
             arrange(desc(FecFact))
           
           if (nrow(df_modal) == 0) {
-            return(p("Sin lotes registrados para esta dimensión en el periodo.",
-                     style = "color:#888; margin-top:12px;"))
+            return(p(
+              "Sin lotes registrados para esta dimension en el periodo.",
+              style = "color:#888; margin-top:12px;"
+            ))
           }
           
+          # Tabla reactable de detalle de lotes en modal
           reactable::reactable(
             data            = df_modal,
             sortable        = TRUE,
@@ -1380,17 +1355,17 @@ Presupuesto <- function(id, dat) {
                 name = "Fecha Factura", minWidth = 110,
                 cell = function(v) if (is.na(v)) "\u2014" else format(as.Date(v), "%d %b %Y")
               ),
-              PerRazSoc  = reactable::colDef(name = "Razón Social",  minWidth = 180),
-              CLLinNegNo = reactable::colDef(name = "Línea Negocio", minWidth = 130),
+              PerRazSoc  = reactable::colDef(name = "Razon Social",  minWidth = 180),
+              CLLinNegNo = reactable::colDef(name = "Linea Negocio", minWidth = 130),
               CLLotCod   = reactable::colDef(name = "Lote",          minWidth = 80),
               Asesor     = reactable::colDef(name = "Asesor",        minWidth = 120),
               Segmento   = reactable::colDef(name = "Segmento",      minWidth = 100),
               Sacos70    = reactable::colDef(
-                name = "Sacos (70Kg)", minWidth = 100,
+                name   = "Sacos (70Kg)", minWidth = 100,
                 format = reactable::colFormat(separators = TRUE, digits = 1)
               ),
               Margen     = reactable::colDef(
-                name = "Margen ($)", minWidth = 110,
+                name   = "Margen ($)", minWidth = 110,
                 format = reactable::colFormat(prefix = "$", separators = TRUE, digits = 0)
               )
             )
@@ -1422,7 +1397,7 @@ Presupuesto <- function(id, dat) {
         ))),
         htmltools::tags$br(),
         htmltools::tags$span(htmltools::HTML(paste0(
-          "<b>Proyección de cierre:</b> ",
+          "<b>Proyeccion de cierre:</b> ",
           "<code style='background:#f3f4f6;color:#374151;padding:1px 5px;border-radius:3px;'>",
           "Ejecutado YTD \u00f7 Meses transcurridos \u00d7 12</code>"
         ))),
@@ -1430,7 +1405,7 @@ Presupuesto <- function(id, dat) {
         htmltools::tags$span(htmltools::HTML(paste0(
           "<b>Verosimilitud:</b> ",
           "<code style='background:#f3f4f6;color:#374151;padding:1px 5px;border-radius:3px;'>",
-          "Proyección \u00f7 Presupuesto anual</code>"
+          "Proyeccion \u00f7 Presupuesto anual</code>"
         ))),
         htmltools::tags$br(),
         htmltools::tags$span(htmltools::HTML(paste0(
@@ -1456,9 +1431,10 @@ Presupuesto <- function(id, dat) {
       s       <- .SEMAFORO
       
       if (medida == "sacos") {
-        col_cumpl  <- "Cumpl_Sacos_YTD"; col_prob   <- "Prob_Sacos"
-        col_ytd    <- "Sacos_YTD";       col_brecha <- "Brecha_Sacos"
-        lbl_medida <- "Sacos";           fmt_val    <- function(x) scales::comma(x, accuracy = 1)
+        col_cumpl  <- "Cumpl_Sacos_YTD";  col_prob   <- "Prob_Sacos"
+        col_ytd    <- "Sacos_YTD";        col_brecha <- "Brecha_Sacos"
+        lbl_medida <- "Sacos"
+        fmt_val    <- function(x) scales::comma(x, accuracy = 1)
       } else {
         col_cumpl  <- "Cumpl_Margen_YTD"; col_prob   <- "Prob_Margen"
         col_ytd    <- "Margen_YTD";       col_brecha <- "Brecha_Margen"
@@ -1471,14 +1447,14 @@ Presupuesto <- function(id, dat) {
       
       df <- df %>%
         mutate(
-          dim     = if ("dim" %in% names(df)) dim else paste0(RazSoc, " \u2014 ", LinNeg),
-          .cx     = !!sym(col_cumpl), .cy = !!sym(col_prob),
-          .ytd    = !!sym(col_ytd),   .brecha = !!sym(col_brecha),
+          dim         = if ("dim" %in% names(df)) dim else paste0(RazSoc, " \u2014 ", LinNeg),
+          .cx         = !!sym(col_cumpl), .cy     = !!sym(col_prob),
+          .ytd        = !!sym(col_ytd),   .brecha = !!sym(col_brecha),
           color_punto = .color_punto_cumpl(.cx, .cy),
-          tooltip = paste0(
+          tooltip     = paste0(
             "<b>", dim, "</b><br>",
             "Cumpl. Acum. ", periodo, ": ", scales::percent(.cx, accuracy = 0.1), "<br>",
-            "Proyección cierre: ",          scales::percent(.cy, accuracy = 0.1), "<br>",
+            "Proyeccion cierre: ",          scales::percent(.cy, accuracy = 0.1), "<br>",
             lbl_medida, " Acum.: ", fmt_val(.ytd), "<br>",
             "Brecha: ", fmt_val(.brecha)
           )
@@ -1509,14 +1485,14 @@ Presupuesto <- function(id, dat) {
         ) %>%
         layout(
           title = paste0(
-            "Proyección de Cierre \u2014 ", periodo, " \u00b7 ", lbl, " (", lbl_medida, ")"
+            "Proyeccion de Cierre \u2014 ", periodo, " \u00b7 ", lbl, " (", lbl_medida, ")"
           ),
           xaxis = list(
-            title = paste0("Cumpl. Acum. ", periodo, " (%)"),
+            title      = paste0("Cumpl. Acum. ", periodo, " (%)"),
             tickformat = ".0%", range = c(0, x_max)
           ),
           yaxis = list(
-            title = "Proyección de Cierre (%)",
+            title      = "Proyeccion de Cierre (%)",
             tickformat = ".0%", range = c(0, y_max)
           ),
           shapes = list(
@@ -1547,7 +1523,8 @@ Presupuesto <- function(id, dat) {
       
       if (medida == "sacos") {
         col_actual <- "Ritmo_Sacos_Actual"; col_req    <- "Ritmo_Sacos_Req"
-        lbl_medida <- "Sacos";              fmt_val    <- function(x) scales::comma(x, accuracy = 1)
+        lbl_medida <- "Sacos"
+        fmt_val    <- function(x) scales::comma(x, accuracy = 1)
         lbl_unidad <- "sacos/mes"
       } else {
         col_actual <- "Ritmo_Margen_Actual"; col_req   <- "Ritmo_Margen_Req"
@@ -1581,31 +1558,31 @@ Presupuesto <- function(id, dat) {
         add_bars(
           data = df, x = ~.b_rojo, y = ~dim, base = 0, orientation = "h",
           width = band_w, name = "Riesgo (< 70%)",
-          marker = list(color = "#FEE2E2", line = list(color = "#FECACA", width = 0.5)),
+          marker    = list(color = "#FEE2E2", line = list(color = "#FECACA", width = 0.5)),
           hoverinfo = "skip", showlegend = TRUE
         ) %>%
         add_bars(
           data = df, x = ~(.b_amarillo - .b_rojo), y = ~dim, base = ~.b_rojo,
-          orientation = "h", width = band_w, name = "Atención (70-90%)",
-          marker = list(color = "#FEF9C3", line = list(color = "#FDE68A", width = 0.5)),
+          orientation = "h", width = band_w, name = "Atencion (70-90%)",
+          marker    = list(color = "#FEF9C3", line = list(color = "#FDE68A", width = 0.5)),
           hoverinfo = "skip", showlegend = TRUE
         ) %>%
         add_bars(
           data = df, x = ~(.b_verde - .b_amarillo), y = ~dim, base = ~.b_amarillo,
           orientation = "h", width = band_w, name = "En ruta (\u2265 90%)",
-          marker = list(color = "#DCFCE7", line = list(color = "#BBF7D0", width = 0.5)),
+          marker    = list(color = "#DCFCE7", line = list(color = "#BBF7D0", width = 0.5)),
           hoverinfo = "skip", showlegend = TRUE
         ) %>%
         add_bars(
           data = df, x = ~.act, y = ~dim, base = 0, orientation = "h",
           width = bar_w, name = paste0("Ritmo actual (", lbl_unidad, ")"),
-          marker     = list(color = "#334155", opacity = 0.90, line = list(width = 0)),
-          customdata = ~tooltip,
+          marker        = list(color = "#334155", opacity = 0.90, line = list(width = 0)),
+          customdata    = ~tooltip,
           hovertemplate = "%{customdata}<extra></extra>", showlegend = TRUE
         ) %>%
         add_markers(
           data = df, x = ~.req, y = ~dim, name = "Ritmo requerido",
-          marker = list(
+          marker    = list(
             color  = "#0F172A", symbol = "line-ns-open", size = 16,
             line   = list(color = "#0F172A", width = 4)
           ),
@@ -1617,7 +1594,7 @@ Presupuesto <- function(id, dat) {
       p %>%
         layout(
           title   = paste0(
-            "Velocidad de Ejecución vs Requerida \u2014 ", lbl, " (", lbl_medida, ")"
+            "Velocidad de Ejecucion vs Requerida \u2014 ", lbl, " (", lbl_medida, ")"
           ),
           barmode = "overlay",
           xaxis   = list(
@@ -1642,12 +1619,28 @@ ui <- bs4DashPage(
   title = "Presupuesto", header = bs4DashNavbar(),
   sidebar = bs4DashSidebar(), controlbar = bs4DashControlbar(),
   footer = bs4DashFooter(),
-  body   = bs4DashBody(useShinyjs(), PresupuestoUI("presupuesto"))
+  body   = bs4DashBody(useShinyjs(), 
+                       includeCSS("https://raw.githubusercontent.com/HCamiloYateT/Compartido/refs/heads/main/Styles/style.css"),
+                       PresupuestoUI("presupuesto"))
 )
 server <- function(input, output, session) {
   Presupuesto(
     "presupuesto",
-    dat = reactive({ BaseDatos_t })
+    dat = reactive({ BaseDatos_t }),
+    clientes_raw = reactive({
+      CargarDatos("CRMNALCLIENTE") %>%
+        mutate(
+          FecProceso = as.Date(FecProceso),
+          across(where(is.numeric),   ~ ifelse(is.na(.), 0, .)),
+          across(where(is.character), ~ ifelse(is.na(.) | . == "N/A", "", .))
+        ) %>% 
+        left_join(CargarDatos("CRMNALLOCAL") %>% 
+                    mutate(FecProceso = as.Date(FecProceso)) %>% 
+                    group_by(CliNitPpal) %>% 
+                    filter(FecProceso == max(FecProceso)), 
+                  by = join_by(FecProceso, Usr, CliNitPpal)) %>% 
+        mutate(LinNegocio = ifelse(LinNegCod == 10000, "CONVENCIONALES", "A LA MEDIDA"))
+    })
   )
 }
 shinyApp(ui, server)

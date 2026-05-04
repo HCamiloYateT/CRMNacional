@@ -1,6 +1,6 @@
 bs4DashPage(
   title = "CRM Nacional", dark = NULL, scrollToTop = TRUE, fullscreen = TRUE, help = NULL, 
-  preloader = preloader,
+  preloader = preloader_inicio,
   header = header,
   sidebar = sidebar,
   body = body,

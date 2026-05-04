@@ -557,7 +557,7 @@ Individual <- function(id, dat, usr) {
       input$IND_VariableSerie
     }, {
       
-      waiter_show(html = preloader2$html, color = preloader2$color)
+      waiter_show(html = preloader_calculando$html, color = preloader_calculando$color)
       on.exit(waiter_hide())
       
       ts_alm <- dat() %>% 

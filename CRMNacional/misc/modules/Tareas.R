@@ -392,7 +392,7 @@ TaskCreation <- function(id, usr, notes_data) {
     
     # Guardar nota o tarea
     observeEvent(input$TSK_Guardar, {
-      waiter_show(html = preloader2$html, color = preloader2$color)
+      waiter_show(html = preloader_calculando$html, color = preloader_calculando$color)
       
       if (is.null(input$TSK_Titulo) || trimws(input$TSK_Titulo) == "") {
         waiter_hide()
@@ -498,7 +498,7 @@ noteDisplayUI <- function(id) {
     column(2,
            tags$div(class = "tsk-filtros-acciones",
                     BotonDescarga(ns("btn_descarga"), title = "Exportar notas filtradas",
-                                  icon_name = "file-excel", align = "left"))
+                                  icono = "file-excel", align = "left"))
            )
     )
 }

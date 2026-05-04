@@ -139,6 +139,11 @@ server <- function(input, output, session) {
 
   # Llamada a valores de los filtros
   filtros <- FiltrosServer("Filtros", usuario, productos_cache)
+  observe({
+    f <- filtros()
+    assign("f", f, envir = .GlobalEnv) # [DEBUG]
+    
+  })
 
   # Valores reactivos base cargados desde DataPrep
   datos_rv    <- reactiveVal(data)
@@ -154,7 +159,13 @@ server <- function(input, output, session) {
         FecProceso = as.Date(FecProceso),
         across(where(is.numeric),   ~ ifelse(is.na(.), 0, .)),
         across(where(is.character), ~ ifelse(is.na(.) | . == "N/A", "", .))
-      )
+      ) %>% 
+      left_join(CargarDatos("CRMNALLOCAL") %>% 
+                  mutate(FecProceso = as.Date(FecProceso)) %>% 
+                  group_by(CliNitPpal) %>% 
+                  filter(FecProceso == max(FecProceso)), 
+                by = join_by(FecProceso, Usr, CliNitPpal)) %>% 
+      mutate(LinNegocio = ifelse(LinNegCod == 10000, "CONVENCIONALES", "A LA MEDIDA"))
   })
 
   ## Pendientes de produccion, despacho y facturacion desde EXPCUALO
@@ -291,7 +302,7 @@ server <- function(input, output, session) {
   indicators_cache <- reactiveVal(NULL)
   last_update_time <- reactiveVal(Sys.time() - 3600)
   data_ind <- reactive({
-    waiter_show(html = preloader2$html, color = preloader2$color)
+    waiter_show(html = preloader_actualizar$html, color = preloader_actualizar$color)
     on.exit(waiter_hide())
     current_time <- Sys.time()
     needs_update <- is.null(indicators_cache()) ||
@@ -369,12 +380,12 @@ server <- function(input, output, session) {
 
   ## Columnas de CRMNALCLIENTE a incorporar al cuadro de lotes
   .cols_cli <- c(
-    "Asesor", "Segmento", "Depto", "Mpio", "Localidad", "Direccion",
-    "Estado", "NumMesesRecuperar", PptoSacos = "SSPpto", PptoMargen = "MNFCCPpto",
+    "Asesor", "Segmento", "Depto", "Mpio",
+    "NumMesesRecuperar", PptoSacos = "SSPpto", PptoMargen = "MNFCCPpto",
     "Excluir"
   )
 
-  ## Capa pesada de datos de lotes ----
+  ## Lotes ----
   data_lotes_enriquecidos <- reactive({
     datos_rv() %>%
       select(-any_of(.cols_fact_stale)) %>%
@@ -420,11 +431,10 @@ server <- function(input, output, session) {
         by = c("LinNegCod", "LinProCod", "MCCod", "MrcCod")
       )
   })
-  observeEvent(data_lotes_enriquecidos(), { assign("lotes_enriquecidos", data_lotes_enriquecidos(), envir = .GlobalEnv) }) # [DEBUG]
-
+  
   ## data_c: enriquecimiento por cliente y periodo ----
   data_c <- reactive({
-    waiter_show(html = preloader2$html, color = preloader2$color)
+    waiter_show(html = preloader_actualizar$html, color = preloader_actualizar$color)
     on.exit(waiter_hide())
     f <- filtros()
     req(f$periodo)
@@ -455,8 +465,6 @@ server <- function(input, output, session) {
   # Sin preloader: es filter() puro sobre data_c() ya cacheado en memoria.
   data_t <- reactive({
     f <- filtros()
-    assign("f", f, envir = .GlobalEnv) # [DEBUG]
-    
     req(data_c(), f$asesor, f$segmento, f$linneg, f$categoria, f$producto)
     data_c() %>%
       filter(
@@ -464,8 +472,8 @@ server <- function(input, output, session) {
         Asesor     %in% f$asesor,
         Segmento   %in% f$segmento,
         CLLinNegNo %in% f$linneg,
-        Categoria  %in% f$categoria,
-        Producto   %in% f$producto
+        # Categoria  %in% f$categoria,
+        # Producto   %in% f$producto
       )
   })
   observeEvent(data_t(), { assign("BaseDatos_t", data_t(), envir = .GlobalEnv) }) # [DEBUG]
@@ -490,7 +498,7 @@ server <- function(input, output, session) {
   # Tablas de referencia (NLINEANE, NTIPPROD, EXPLOT1) servidas desde cache.
   # Solo se ejecutan dos ConsultaSistema vivas por cada activacion del reactivo.
   ped_sinlote <- reactive({
-    waiter_show(html = preloader2$html, color = preloader2$color)
+    waiter_show(html = preloader_actualizar$html, color = preloader_actualizar$color)
     on.exit(waiter_hide())
     f <- filtros()
     ConsultaSistema(
@@ -586,7 +594,7 @@ server <- function(input, output, session) {
 
   ## Consulta individual ----
   data_individual <- reactive({
-    waiter_show(html = preloader2$html, color = preloader2$color)
+    waiter_show(html = preloader_actualizar$html, color = preloader_actualizar$color)
     on.exit(waiter_hide())
     req(input$IND_Cliente, input$IND_LinNeg)
     data_c() %>% filter(PerRazSoc == input$IND_Cliente, CLLinNegNo == input$IND_LinNeg)
@@ -594,7 +602,7 @@ server <- function(input, output, session) {
 
   # Actualizacion Manual ----
   observeEvent(input$FT_Actualizar, {
-    waiter_show(html = preloader2$html, color = preloader2$color)
+    waiter_show(html = preloader_actualizar$html, color = preloader_actualizar$color)
     tryCatch(
       {
         nuevos_datos <- cargar_datos_base()
@@ -647,13 +655,14 @@ server <- function(input, output, session) {
     dat_leads         = data_leads_f,
     dat_oportunidades = data_oportunidades_f,
     dat_competencia   = data_competencia_f,
+    clientes_raw      = clientes_raw,
     usr               = usuario,
     trigger_update    = trigger_update_opt
   )
 
   ComparacionIndicadores("CompIndicadores", data_ind)
   Calculadora("Calculadoras", data_ind, usuario)
-  Presupuesto("PresupuestoTotal", data_t)
+  Presupuesto("PresupuestoTotal", data_t, clientes_raw)
   Pendientes("Pendientes", data_f, ped_sinlote, usuario)
 
   ### Oportunidades ----
@@ -668,7 +677,7 @@ server <- function(input, output, session) {
                  trigger_update = trigger_update_opt)
 
   ppto_clientes <- reactive({ data_t() %>% filter(SegmentoRacafe == "CLIENTE") })
-  Presupuesto("Presupuesto", ppto_clientes)
+  Presupuesto("Presupuesto", ppto_clientes, clientes_raw)
 
   RFM("RFMClientesSacos",  data_rfm_cliente_f_s)
   RFM("RFMClientesMargen", data_rfm_cliente_f_m, "$ MNFCC")

@@ -11,25 +11,25 @@ get_fnc_data <- function() {
     url <- 'https://federaciondecafeteros.org/wp/'
     contenido <- read_html(url)
     
-    precio <- contenido %>%
-      html_nodes("ul.lista li[tabindex='1']") %>%
-      html_nodes("strong") %>%
-      html_text() %>% 
-      .[1]
+    # Extraer todos los textos de los items del menu
+    items <- contenido %>%
+      html_nodes("ul.e-n-menu-heading li.e-n-menu-item span.e-n-menu-title-text") %>%
+      html_text(trim = TRUE)
     
-    bolsa <- contenido %>%
-      html_nodes("ul.lista li[tabindex='2']") %>%
-      html_nodes("strong") %>%
-      html_text() %>% 
-      .[1]
+    # Precio interno: primer item (contiene "$2.245.000")
+    precio_raw <- items[1]
+    precio <- as.numeric(gsub("\\D", "", precio_raw))
+    
+    # Bolsa NY: segundo item (contiene "$300,85")
+    bolsa_raw <- items[2]
+    bolsa <- as.numeric(gsub(".*:\\s*\\$?", "", bolsa_raw) %>% gsub(",", ".", .))
     
     list(
-      precio = as.numeric(gsub("\\D", "", precio)),
-      bolsa = as.numeric(gsub(",", ".", bolsa))
+      precio = precio,
+      bolsa = bolsa
     )
   }, error = function(e) {
     warning("Error obteniendo datos de FNC: ", e$message)
-    # Valores predeterminados en caso de error
     list(precio = NA, bolsa = NA)
   })
 }

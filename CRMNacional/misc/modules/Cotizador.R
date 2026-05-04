@@ -2,7 +2,7 @@
 VENDEDORES_DATA <- data.frame(
   Asesor = c("CMEDINA", "JGCANON", "LABOYACA", "GACORREDOR"),
   Nombre = c("Carlos Medina", "Jonathan Cañon", "Luis Boyacá", "Gustavo Corredor"),
-  Cargo = c("Coordinador Negocios Industria Nacional", "Jefe Negocios Industria Nacional", 
+  Cargo = c("Coordinador Negocios Industria Nacional", "Jefe Negocios Industria Nacional",
             "Asesor Comercial", "Asesor Comercial"),
   Email = c("cmedina@racafe.com", "jgcanon@racafe.com", "laboyaca@racafe.com", "gacorredor@racafe.com"),
   stringsAsFactors = FALSE
@@ -17,8 +17,8 @@ persona <- c(
 ProductoUI <- function(id, num, dat) {
   ns <- NS(id)
   div(
-    id = ns("wrapper"), 
-    bs4Dash::bs4Card(title = paste("Producto", num), status = "white", solidHeader = TRUE, 
+    id = ns("wrapper"),
+    bs4Dash::bs4Card(title = paste("Producto", num), status = "white", solidHeader = TRUE,
                      width = 12, collapsible = FALSE,
                      fluidRow(
                        column(6,
@@ -40,15 +40,15 @@ ProductoUI <- function(id, num, dat) {
         column(6,
                autonumericInput(
                  ns("Cantidad"), label = Obligatorio("Cantidad (Kilos)"), value = NULL,
-                 decimalPlaces = 1, width = "100%", minimumValue = 1, 
-                 currencySymbol = " kilos", currencySymbolPlacement = "s", 
+                 decimalPlaces = 1, width = "100%", minimumValue = 1,
+                 currencySymbol = " kilos", currencySymbolPlacement = "s",
                  style = "height: 25px !important; font-size: 14px;"
                  )
                )
         ),
       fluidRow(
-        column(6, 
-               ListaDesplegable(ns("Presentacion"), label = Obligatorio("Presentacion"), 
+        column(6,
+               ListaDesplegable(ns("Presentacion"), label = Obligatorio("Presentacion"),
                                 choices = c("","Sacos de 70kgs", "Sacos de 62.5Kgs", "Sacos de 35Kgs", "Grainpro 70kgs"),
                                 selected = NULL, multiple = FALSE)
                ),
@@ -59,7 +59,7 @@ ProductoUI <- function(id, num, dat) {
                )
         ),
       fluidRow(
-        column(6, 
+        column(6,
                autonumericInput(
                  ns("Precio"), label = Obligatorio("Precio por Kilo"), value = NULL,
                  decimalPlaces = 0, currencySymbol = "$", width = "100%",
@@ -68,8 +68,8 @@ ProductoUI <- function(id, num, dat) {
                ),
         column(6,
                div(style = "margin-top: 25px;",
-                   h6("Total: ", 
-                      span(id = ns("Total"), "$0", 
+                   h6("Total: ",
+                      span(id = ns("Total"), "$0",
                            style = "font-weight: bold; color: #000;"))
                    )
                )
@@ -80,36 +80,36 @@ ProductoUI <- function(id, num, dat) {
 Producto <- function(id, dat) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
-    
+
     # Actualizar Categoria y Producto ----
     observeEvent(input$LinNeg, {
       req(input$LinNeg)
-      cho_cat <- c("", 
+      cho_cat <- c("",
                    dat %>%
                      filter(CLLinNegNo == input$LinNeg) %>%
-                     mutate(Categoria = ifelse(Categoria == "BLEND", "FUERA DE NORMA", Categoria)) %>% 
+                     mutate(Categoria = ifelse(Categoria == "BLEND", "FUERA DE NORMA", Categoria)) %>%
                      pull(Categoria) %>%
                      Unicos())
-      
+
       updatePickerInput(session, "Categoria", choices = cho_cat, selected = NULL)
     })
     observeEvent(input$Categoria, {
       req(input$Categoria)
-      
+
       cat <- ifelse(input$Categoria == "FUERA DE NORMA", "BLEND", input$Categoria)
-      
-      cho_prod <- c("", 
-                    dat %>%  
+
+      cho_prod <- c("",
+                    dat %>%
                       filter(Categoria == cat) %>%
                       pull(Producto) %>%
                       Unicos())
-      
+
       updatePickerInput(session, "Producto", choices = cho_prod, selected = NULL)
     })
-    
+
     # Cálculo de total del producto ----
     total_producto <- reactive({
-      if (!is.null(input$Cantidad) && !is.null(input$Precio) && 
+      if (!is.null(input$Cantidad) && !is.null(input$Precio) &&
           input$Cantidad > 0 && input$Precio > 0) {
         as.numeric(input$Cantidad) * as.numeric(input$Precio)
       } else {
@@ -121,7 +121,7 @@ Producto <- function(id, dat) {
       total_formateado <- paste0("$", format(total, big.mark = ".", decimal.mark = ",", scientific = FALSE))
       shinyjs::html("Total", total_formateado)
     })
-    
+
     # Validación de campos del producto ----
     producto_valido <- reactive({
       all(
@@ -134,7 +134,7 @@ Producto <- function(id, dat) {
         !is.null(input$Precio) && input$Precio > 0
       )
     })
-    
+
     # Retornar valores reactivos del producto
     return(reactive({
       list(
@@ -164,19 +164,19 @@ CotizacionUI <- function(id) {
       # Cliente
       fluidRow(
         column(12,
-               ListaDesplegable(ns("COT_Cliente"), label = Obligatorio("Cliente"), 
+               ListaDesplegable(ns("COT_Cliente"), label = Obligatorio("Cliente"),
                                 choices = persona, selected = NULL, multiple = FALSE)
                )
         ),
       # Fechas
       fluidRow(
         column(6, airDatepickerInput(
-          ns("COT_FechaIni"), label = Obligatorio("Efectiva Desde:"), 
+          ns("COT_FechaIni"), label = Obligatorio("Efectiva Desde:"),
           timepicker = TRUE, value = Sys.time(), width = "100%"
         )),
         column(6, airDatepickerInput(
-          ns("COT_FechaFin"), label = Obligatorio("Efectiva Hasta:"), 
-          timepicker = TRUE, value = as.POSIXct(paste(Sys.Date(), "16:00:00")), 
+          ns("COT_FechaFin"), label = Obligatorio("Efectiva Hasta:"),
+          timepicker = TRUE, value = as.POSIXct(paste(Sys.Date(), "16:00:00")),
           width = "100%"
         ))
       ),
@@ -192,7 +192,7 @@ CotizacionUI <- function(id) {
         column(6,
                hidden(
                  div(id = ns("div_responsable"),
-                     ListaDesplegable(ns("COT_Responsable"), label = h6("Responsable"), 
+                     ListaDesplegable(ns("COT_Responsable"), label = h6("Responsable"),
                                       choices = Choices()$personas, selected = NULL, multiple = FALSE
                                       )
                      )
@@ -203,7 +203,7 @@ CotizacionUI <- function(id) {
       fluidRow(
         column(6,
                ListaDesplegable(ns("COT_Divisa"), Obligatorio("Divisa"),
-                                choices = c("Peso Colombiano", "Dólares"), 
+                                choices = c("Peso Colombiano", "Dólares"),
                                 selected = "Peso Colombiano", multiple = FALSE)
         ),
         column(6,
@@ -217,19 +217,19 @@ CotizacionUI <- function(id) {
       div(id = ns("productos_container")),
       # Botones para agregar/eliminar productos
       div(style = "display: flex; justify-content: flex-end; gap: 10px; margin-bottom: 20px;",
-          actionBttn(inputId = ns("COT_RemoveProducto"), label = NULL, 
-                     style = "material-circle", color = "warning", 
+          actionBttn(inputId = ns("COT_RemoveProducto"), label = NULL,
+                     style = "material-circle", color = "warning",
                      icon = icon("minus"), size = "xs"),
-          actionBttn(inputId = ns("COT_AddProducto"), label = NULL, 
-                     style = "material-circle", color = "danger", 
+          actionBttn(inputId = ns("COT_AddProducto"), label = NULL,
+                     style = "material-circle", color = "danger",
                      icon = icon("plus"), size = "xs")
       ),
       # Total general
       fluidRow(
         column(12,
                div(style = "text-align: right;",
-                   h4(icon("calculator"), "Total General: ", 
-                      span(id = ns("total_general"), "$0", 
+                   h4(icon("calculator"), "Total General: ",
+                      span(id = ns("total_general"), "$0",
                            style = "font-weight: bold; color: #000;"))
                )
         )
@@ -239,7 +239,7 @@ CotizacionUI <- function(id) {
       div(
         style = "text-align:center; margin-top:10px;",
         downloadButton(
-          outputId = ns("COT_Crear"), 
+          outputId = ns("COT_Crear"),
           label = "Generar Cotización PDF",
           class = "btn btn-danger btn-block"
         )
@@ -250,7 +250,7 @@ CotizacionUI <- function(id) {
 Cotizacion <- function(id, usr, dat) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
-    
+
     # Funciones ----
     obtener_datos_cotizacion <- function() {
       aux1 <- CargarDatos("CRMCOTIZACION")
@@ -277,27 +277,26 @@ Cotizacion <- function(id, usr, dat) {
       )
     }
     obtener_datos_cliente <- function(cliente) {
-      
+
       aux1 <- bind_rows(NCLIENTE %>% select(PerRazSoc, CliNitPpal, CliDir, CliDir1, CliTel),
-                        CargarDatos("CRMNALLEAD") %>% select(PerRazSoc = PerRazSoc, CliNitPpal = PerCod, 
-                                                             CliDir = Depto, CliDir1 = Mpio, CliTel = Telefonos)
-                        ) %>% 
-        filter(PerRazSoc == cliente) %>% 
-        select(PerRazSoc, CliNitPpal, CliDir, CliDir1, CliTel) %>% 
+                        CargarDatos("CRMNALLEAD") %>% select(PerRazSoc = PerRazSoc, CliNitPpal = CLCliNit)
+                        ) %>%
+        filter(PerRazSoc == cliente) %>%
+        select(PerRazSoc, CliNitPpal, CliDir, CliDir1, CliTel) %>%
         filter(row_number() == 1)
-      
+
       if (nrow(aux1) != 1) return(NULL)
-      
+
       fpg_query <- sprintf(
-        "SELECT f.ForPagNom FROM NCLIENT5 c 
+        "SELECT f.ForPagNom FROM NCLIENT5 c
          LEFT JOIN NFORPAG f ON c.ForPagCod = f.ForPagCod
          WHERE c.CliNit = '%s'", aux1$CliNitPpal
       )
-      
+
       fpg <- tryCatch({
         ConsultaSistema("syscafe", fpg_query) %>% pull(ForPagNom)
       }, error = function(e) "CONTADO CONTRA ENTREGA")
-      
+
       list(
         NIT = safe_val(aux1$CliNitPpal),
         DIR = safe_val(aux1$CliDir),
@@ -306,31 +305,31 @@ Cotizacion <- function(id, usr, dat) {
         FPG = fpg
       )
     }
-    
+
     # Manejo de Productos ----
     productos_modulos <- reactiveVal(list())
     contador_productos <- reactiveVal(0)
     crear_nuevo_producto <- function() {
       contador_productos(contador_productos() + 1)
       nuevo_id <- paste0("producto_", contador_productos())
-      
+
       # Insertar UI del producto
       insertUI(
         selector = paste0("#", ns("productos_container")),
         ui = ProductoUI(ns(nuevo_id), contador_productos(), dat())
       )
-      
+
       # Crear módulo del producto
       nuevo_modulo <- Producto(nuevo_id, dat())
-      
+
       # Agregar a la lista de módulos
       modulos_actuales <- productos_modulos()
       modulos_actuales[[nuevo_id]] <- nuevo_modulo
       productos_modulos(modulos_actuales)
-      
+
       return(nuevo_id)
     }
-    
+
     # Insertar primer producto al inicializar
     observeEvent(TRUE, {
       if (contador_productos() == 0) {
@@ -351,7 +350,7 @@ Cotizacion <- function(id, usr, dat) {
         productos_modulos(modulos_actuales)
       }
     })
-    
+
     # Calculo del Total  ----
     total_general <- reactive({
       modulos <- productos_modulos()
@@ -367,7 +366,7 @@ Cotizacion <- function(id, usr, dat) {
       total_formateado <- paste0("$", format(total, big.mark = ".", decimal.mark = ",", scientific = FALSE))
       shinyjs::html("total_general", total_formateado)
     })
-    
+
     # Validación de campos ----
     campos_ok <- reactive({
       basicos_ok <- all(
@@ -378,12 +377,12 @@ Cotizacion <- function(id, usr, dat) {
 
       modulos <- productos_modulos()
       if (length(modulos) == 0) return(FALSE)
-      
+
       productos_ok <- all(sapply(modulos, function(mod) {
         datos <- mod()
         datos$Valido
       }))
-      
+
       return(basicos_ok && productos_ok)
     })
     observe({
@@ -400,7 +399,7 @@ Cotizacion <- function(id, usr, dat) {
         shinyjs::show("div_responsable")
       }
     })
-    
+
     # Generar PDF de cotizacion -----
     crear_tabla_encabezado <- function(input, data_cot, data_ven, data_cli) {
       campos_base <- c(
@@ -409,11 +408,11 @@ Cotizacion <- function(id, usr, dat) {
         "", "",
         "De:", "Email:",
         "", "",
-        "Razón Social:", "NIT:", 
-        "Dirección:", "Tel:", 
+        "Razón Social:", "NIT:",
+        "Dirección:", "Tel:",
         "País:", "Ciudad:"
       )
-      
+
       valores_base <- c(
         paste(sprintf("%05d", data_cot$Num + 1)),
         "",
@@ -430,20 +429,20 @@ Cotizacion <- function(id, usr, dat) {
         "COLOMBIA",
         data_cli$DIR1 %||% ""
       )
-      
+
       # Si NO es cotización genérica, insertar el campo Cargo
       if (!isTRUE(input$COT_NombrePropio)) {
         pos_cargo <- which(campos_base == "De:")
         campos_base <- append(campos_base, "Cargo:", after = pos_cargo)
         valores_base <- append(valores_base, data_ven$Cargo %||% "", after = pos_cargo)
       }
-      
+
       # Asegurar número par de elementos
       if (length(campos_base) %% 2 != 0) {
         campos_base <- c(campos_base, "")
         valores_base <- c(valores_base, "")
       }
-      
+
       data.frame(
         Campo1 = campos_base[seq(1, length(campos_base), 2)],
         Valor1 = valores_base[seq(1, length(valores_base), 2)],
@@ -455,14 +454,14 @@ Cotizacion <- function(id, usr, dat) {
     crear_tabla_productos <- function() {
       modulos <- productos_modulos()
       if (length(modulos) == 0) return(data.frame())
-      
+
       # Función auxiliar para valores seguros
       safe_val <- function(x) ifelse(is.null(x) || length(x) == 0, "", as.character(x))
       safe_num <- function(x) ifelse(is.null(x) || length(x) == 0, 0, as.numeric(x))
-      
+
       productos_list <- lapply(modulos, function(mod) {
         datos <- mod()
-        
+
         # Crear descripción concatenada con valores seguros
         descripcion <- str_to_upper(
           paste(trimws(safe_val(datos$Producto)), "en presentacion de ",
@@ -473,7 +472,7 @@ Cotizacion <- function(id, usr, dat) {
         # Limpiar guiones extras
         descripcion <- gsub("\\s*-\\s*-\\s*", " - ", descripcion)
         descripcion <- gsub("^\\s*-\\s*|\\s*-\\s*$", "", descripcion)
-        
+
         data.frame(
           Descripcion = descripcion,
           Kilos = safe_num(datos$Cantidad),
@@ -482,11 +481,11 @@ Cotizacion <- function(id, usr, dat) {
           stringsAsFactors = FALSE
         )
       })
-      
+
       # Unir todos los productos y eliminar rownames
       resultado <- do.call(rbind, productos_list)
       rownames(resultado) <- NULL  # <<<< ELIMINA LOS ROWNAMES
-      
+
       return(resultado)
     }
     output$COT_Crear <- downloadHandler(
@@ -496,34 +495,34 @@ Cotizacion <- function(id, usr, dat) {
       },
       content = function(file) {
         # Mostrar preloader
-        waiter_show(html = preloader2$html, color = preloader2$color)
+        waiter_show(html = preloader_calculando$html, color = preloader_calculando$color)
         if (!campos_ok()) {
           waiter_hide()
           showNotification("Por favor complete todos los campos obligatorios", type = "error")
           return()
         }
-        
+
         tryCatch({
           # Obtener datos
           data_cot <- obtener_datos_cotizacion()
           data_ven <- obtener_datos_vendedor(input$COT_Responsable, input$COT_NombrePropio)
           data_cli <- obtener_datos_cliente(input$COT_Cliente)
-          
+
           # Validar que se obtuvieron los datos
           if (is.null(data_ven) || is.null(data_cli)) {
             waiter_hide()
             showNotification("Error al obtener datos del vendedor o cliente", type = "error")
             return()
           }
-          
+
           # Crear dataframes para el RMarkdown
           tabla_encabezado <- crear_tabla_encabezado(input, data_cot, data_ven, data_cli)
           tabla_productos <- crear_tabla_productos()
           tabla_forma_pago <- data.frame(Forma_Pago = input$COT_FPago %||% "Contado", stringsAsFactors = FALSE)
-          
+
           # Calcular total general
           total_general_val <- total_general()
-          
+
           # Parámetros para el RMarkdown
           params <- list(
             encabezado = tabla_encabezado,
@@ -532,10 +531,10 @@ Cotizacion <- function(id, usr, dat) {
             total_general = total_general_val,
             divisa = str_to_upper(input$COT_Divisa) %||% "PESO COLOMBIANO"
           )
-          
+
           # Generar PDF
           rmd_path <- file.path(getwd(), "cotizacion.Rmd")
-          
+
           rmarkdown::render(
             input = rmd_path,
             output_file = file,
@@ -543,12 +542,12 @@ Cotizacion <- function(id, usr, dat) {
             envir = new.env(parent = globalenv()),
             quiet = TRUE
           )
-          
+
           # Guardar registro en base de datos
           modulos <- productos_modulos()
           for (i in seq_along(modulos)) {
             datos <- modulos[[i]]()
-            
+
             df_cotizacion <- data.frame(
               ConsCot = data_cot$Num + 1,
               UsuarioCrea = usr(),
@@ -569,21 +568,21 @@ Cotizacion <- function(id, usr, dat) {
             )
             AgregarDatos(df_cotizacion, "CRMCOTIZACION")
           }
-          
+
           # Ocultar preloader y mostrar éxito
           waiter_hide()
           showNotification("Cotización generada exitosamente", type = "message")
-          
+
           # Limpiar formulario
           limpiar_formulario()
-          
+
         }, error = function(e) {
           waiter_hide()
           showNotification(paste("Error al generar cotización:", e$message), type = "error")
         })
       }
     )
-    
+
     # Limpiar Productos ----
     limpiar_formulario <- function() {
       updatePickerInput(session, "COT_Cliente", selected = "")
@@ -592,11 +591,11 @@ Cotizacion <- function(id, usr, dat) {
       updateMaterialSwitch(session, "COT_NombrePropio", value = TRUE)
       updateSelectInput(session, "COT_Divisa", selected = "Peso Colombiano")
       updateSelectInput(session, "COT_FPago", selected = "PAGO ANTICIPADO")
-      
+
       removeUI(selector = paste0("#", ns("productos_container"), " > *"), multiple = TRUE)
       productos_modulos(list())
       contador_productos(0)
-      
+
       crear_nuevo_producto()
     }
   })
@@ -615,7 +614,10 @@ ui <- bs4DashPage(
   )
 )
 server <- function(input, output, session) {
-  Cotizacion("resumen", reactive("HCYATE"), reactive(BaseDatos))
+  Cotizacion("resumen", reactive("HCYATE"), reactive(BaseDatos_c))
 }
 
 shinyApp(ui, server)
+
+
+

@@ -48,7 +48,7 @@ ResumenTotalUI <- function(id) {
     )
   )
 }
-ResumenTotal <- function(id, dat, dat_t, dat_c, dat_leads, dat_oportunidades, dat_competencia,
+ResumenTotal <- function(id, dat, dat_t, dat_c, dat_leads, dat_oportunidades, dat_competencia, clientes_raw,
                          usr, trigger_update) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
@@ -131,7 +131,7 @@ ResumenTotal <- function(id, dat, dat_t, dat_c, dat_leads, dat_oportunidades, da
     
     # UC de dat_f() con transacciones en lo corrido del mes en curso
     nits_mes_corrido <- reactive({
-      dat_f() %>%
+      dat() %>%
         filter(PrimerDia(FecFact) == corte_mes()) %>%
         select(LinNegCod, CliNitPpal) %>%
         distinct()
@@ -257,7 +257,7 @@ ResumenTotal <- function(id, dat, dat_t, dat_c, dat_leads, dat_oportunidades, da
     DashboardOportunidades(  id = "detalle_oportunidades",  dat_oportunidades, usr)
     Cohortes(                id = "detalle_cohortes",       data_tx = dat_c)
     DetalleCompetencia(      id = "detalle_competencia")
-    Presupuesto(             id = "detalle_presupuesto",    dat_t)
+    Presupuesto(             id = "detalle_presupuesto",    dat_t, clientes_raw)
     
     # Cajas KPI presupuesto ----
     CajaModal("kpi_cumpl_sacos",

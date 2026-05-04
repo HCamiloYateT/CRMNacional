@@ -60,7 +60,6 @@ IndicadoresUI <- function(id) {
     gt_output(ns("tabla_disponible"))
   )
 }
-
 Indicadores <- function(id, dat) {
   moduleServer(id, function(input, output, session) {
     
@@ -197,9 +196,9 @@ ComparacionIndicadoresUI <- function(id) {
                )
         ),
         column(3,
-               tags$div(class = "tsk-filtros-label", "Accion"),
+               tags$div(class = "tsk-filtros-label", "Acción"),
                actionButton(
-                 ns("comparar"), "Comparar Indicadores",
+                 ns("comparar"), "Comparar Indicadores", 
                  icon = icon("exchange-alt"), class = "btn-danger",
                  style = "width:100%;"
                )

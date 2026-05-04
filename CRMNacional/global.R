@@ -7,6 +7,7 @@ options(
 )
 
 tit_app = "CRM Nacional"
+estilo_tablas = ""
 
 # Credenciales
 uid = Sys.getenv("SYS_UID")
@@ -28,9 +29,6 @@ source("misc/functions.R")
 source("misc/values.R")
 .app_choices <- Choices()
 source("misc/filters.R")
-
-
-
 
 load_modules <- function() {
   path <- "misc"

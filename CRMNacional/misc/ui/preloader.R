@@ -1,40 +1,26 @@
-preloader <- list(
-  html = tagList(    
-    tags$div(
-      style = "display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh;",
-      tags$img(src = "logo2.png", width = "80px", style = "margin-bottom: 20px;"),
-      tags$h3("Cargando...",
-              style = "color: black; font-size: 10pt; font-weight: bold;"),
-      tags$div(class = "spinner-border text-danger", role = "status")
+.preloader_html <- function(texto, spinner_class) {
+  tagList(
+    tags$div(class = "preloader-card",
+             tags$img(src   = "https://raw.githubusercontent.com/HCamiloYateT/Compartido/refs/heads/main/img/logo2.png",
+                      class = "preloader-logo"),
+             tags$h3(texto, class = "preloader-texto"),
+             tags$div(class = paste(spinner_class, "preloader-spinner"),
+                      role  = "status")
     )
-  ),
+  )
+}
+
+preloader_inicio <- list(
+  html  = .preloader_html(texto = "Cargando ...", spinner_class = "spinner-border preloader-spinner-inicio"),
   color = "#e5e7e9"
 )
 
-preloader2 <- list(
-  html = tagList(    
-    tags$div(
-      style ="
-        width: 300px;
-        height: 200px;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        position: fixed;
-        top: 50%;
-        left: 50%;
-        transform: translate(-50%, -50%);
-        background: white;
-        border-radius: 16px;
-        box-shadow: 0 4px 20px rgba(0,0,0,0.15);
-        z-index: 9999;
-      ",
-      tags$img(src = "logo2.png", width = "80px", style = "margin-bottom: 20px;"),
-      tags$h3("Actualizando...",
-              style = "color: black; font-size: 10pt; font-weight: bold;"),
-      tags$div(class = "spinner-border text-danger", role = "status")
-    )
-  ),
+preloader_actualizar <- list(
+  html  = .preloader_html(texto = "Actualizando ...", spinner_class = "spinner-grow preloader-spinner-actualizar"),
+  color = "transparent"
+)
+
+preloader_calculando <- list(
+  html  = .preloader_html(texto = "Calculando ...", spinner_class = "spinner-border preloader-spinner-calculando"),
   color = "transparent"
 )

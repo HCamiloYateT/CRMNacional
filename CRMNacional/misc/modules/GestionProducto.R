@@ -377,7 +377,7 @@ DashboardProducto <- function(id, dd_data = reactive(NULL)) {
     # Datos filtrados -----
     df_f <- reactive({
       req(input$linneg, input$linpro, input$mc, input$marca)
-      waiter_show(html = preloader2$html, color = preloader2$color)
+      waiter_show(html = preloader_calculando$html, color = preloader_calculando$color)
       on.exit(waiter_hide())
       data %>%
         left_join(NLINEANE, by = join_by(LinNegCod)) %>% 
@@ -425,7 +425,7 @@ DashboardProducto <- function(id, dd_data = reactive(NULL)) {
     # Grafica ----
     df_serie <- reactive({
       req(df_f())
-      waiter_show(html = preloader2$html, color = preloader2$color)
+      waiter_show(html = preloader_calculando$html, color = preloader_calculando$color)
       on.exit(waiter_hide())
       df <- df_f() %>%
         mutate(Mes = floor_date(FecFact, "month")) %>%
@@ -599,7 +599,7 @@ GestionProducto <- function(id, dat, usr) {
     # Tabla ----
     data_completa <- reactive({
       
-      waiter_show(html = preloader2$html, color = preloader2$color)
+      waiter_show(html = preloader_calculando$html, color = preloader_calculando$color)
       on.exit(waiter_hide())
       
       MARCOM   <- ConsultaSistema("syscafe", query = "SELECT MCCod, MCNom FROM NMARCOM")
