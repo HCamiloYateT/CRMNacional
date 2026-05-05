@@ -51,124 +51,162 @@
 
 
 # Consulta e impresion de Indicadores ----
+# Indicadores de Mercado ----
+
 IndicadoresUI <- function(id) {
-  ns <- NS(id)
-  tagList(
-    gt_output(ns("tabla_indicadores")),
-    tags$hr(),
-    h6("Disponible"),
-    gt_output(ns("tabla_disponible"))
+  ns <- shiny::NS(id)
+  shiny::tags$div(
+    style = "min-width:260px; padding:4px 0;",
+    reactable::reactableOutput(ns("tabla_indicadores"), width = "100%"),
+    shiny::tags$hr(style = "margin:4px 0; border-color:#E2E8F0;"),
+    shiny::tags$p(
+      style = "font-size:10px;color:#64748B;padding:2px 10px 0;margin:0;font-weight:600;",
+      "Disponible"
+    ),
+    reactable::reactableOutput(ns("tabla_disponible"), width = "100%"),
+    shiny::uiOutput(ns("pie_disponible"))
   )
 }
-Indicadores <- function(id, dat) {
-  moduleServer(id, function(input, output, session) {
+IndicadoresServer <- function(id, dat) {
+  shiny::moduleServer(id, function(input, output, session) {
+    ns <- session$ns
     
-    # Datos del dia anterior: pivot sobre claves canonicas, recodificado a etiquetas cortas
-    anterior <- CargarDatos("CRMINDICADORES") %>%
-      mutate(Fecha = as.Date(FechaActualizacion)) %>%
-      filter(Fecha == Sys.Date() - 1) %>%
-      select(all_of(.IND_CLAVES_CANON)) %>%
-      pivot_longer(
-        cols      = all_of(.IND_CLAVES_CANON),
-        names_to  = "Item",
-        values_to = "anterior"
-      ) %>%
-      mutate(Item = dplyr::recode(Item, !!!.IND_NOMBRES_CORTOS))
+    .fmt <- racafe::DefinirFormato("dolares")
     
-    output$tabla_indicadores <- render_gt({
-      req(dat())
+    # Día anterior — sin dependencias externas, se cachea por sesión ----
+    anterior_r <- shiny::reactive({
+      racafe::CargarDatos("CRMINDICADORES") %>%
+        dplyr::mutate(Fecha = as.Date(FechaActualizacion)) %>%
+        dplyr::filter(Fecha == Sys.Date() - 1) %>%
+        dplyr::select(dplyr::all_of(.IND_CLAVES_CANON)) %>%
+        tidyr::pivot_longer(
+          cols      = dplyr::all_of(.IND_CLAVES_CANON),
+          names_to  = "Item",
+          values_to = "anterior"
+        ) %>%
+        dplyr::mutate(Item = dplyr::recode(Item, !!!.IND_NOMBRES_CORTOS))
+    })
+    
+    # Tabla principal — HTML de tendencia pre-computado vectorialmente ----
+    output$tabla_indicadores <- reactable::renderReactable({
+      shiny::req(dat())
       
-      # Orden de visualizacion derivado del diccionario canonico
-      orden_items <- unname(.IND_NOMBRES_CORTOS)
+      orden <- unname(.IND_NOMBRES_CORTOS)
       
       tabla <- dat() %>%
-        select(-last_updated) %>%
-        mutate(Item = as.character(Item)) %>%
-        left_join(anterior, by = "Item") %>%
-        rowwise() %>%
-        mutate(
-          Cambio = case_when(
-            Valor > anterior ~ FormatearNumero(Valor, formato = "dolares", color = "#1F7A55"),
-            Valor < anterior ~ FormatearNumero(Valor, formato = "dolares", color = "#9F0712"),
-            TRUE             ~ FormatearNumero(Valor, formato = "dolares", color = "#000")
+        dplyr::select(-last_updated) %>%
+        dplyr::mutate(Item = as.character(Item)) %>%
+        dplyr::left_join(anterior_r(), by = "Item") %>%
+        dplyr::mutate(
+          color  = dplyr::case_when(
+            Valor > anterior ~ "#1F7A55",
+            Valor < anterior ~ "#9F0712",
+            TRUE             ~ "#374151"
+          ),
+          flecha = dplyr::case_when(
+            Valor > anterior ~ "\u25B2",
+            Valor < anterior ~ "\u25BC",
+            TRUE             ~ "\u25B6"
+          ),
+          Valor  = paste0(
+            "<span style='color:", color, ";font-weight:600;font-size:11px;'>",
+            flecha, " ", .fmt(Valor), "</span>"
           )
         ) %>%
-        ungroup() %>%
-        select(Item, Valor = Cambio) %>%
-        mutate(Item = factor(Item, levels = orden_items)) %>%
-        arrange(Item)
+        dplyr::mutate(Item = factor(Item, levels = orden)) %>%
+        dplyr::arrange(Item) %>%
+        dplyr::select(Item, Valor)
       
-      tabla %>%
-        gt() %>%
-        fmt(columns = Valor, fns = function(x) purrr::map(x, gt::html)) %>%
-        cols_align(align = "left",  columns = Item) %>%
-        cols_align(align = "right", columns = Valor) %>%
-        tab_style(
-          style     = cell_text(weight = "bold"),
-          locations = cells_body(columns = Item)
-        ) %>%
-        gt_minimal_style() %>%
-        tab_style(
-          style     = cell_borders(sides = "bottom", color = "black", weight = px(1)),
-          locations = cells_body(rows = 3)
-        ) %>%
-        tab_options(column_labels.hidden = TRUE)
-    })
-    
-    output$tabla_disponible <- render_gt({
-      t1 <- readRDS(
-        "/home/htamara/6_IndustriaNacional/CRM Cliente Nacional/CRMNacional/data/cafexasignar.rds"
-      )
-      texto <- FormatearTexto(
-        paste("**Posici\u00F3n con cierre al**", format(Unicos(t1$Fecha), "%d %b %Y")),
-        tamano_pct = 0.8
-      )
-      t1 %>%
-        filter(Tipo_Negocio == "Disponible") %>%
-        select(Tipo_Negocio, Total_Sacos, PrecioxCarga) %>%
-        pivot_longer(
-          cols      = Total_Sacos:PrecioxCarga,
-          names_to  = "name",
-          values_to = "value"
-        ) %>%
-        mutate(
-          name = recode(name, "Total_Sacos" = "Sacos", "PrecioxCarga" = "Precio de Carga")
-        ) %>%
-        select(Tipo_Negocio = name, Total_Sacos = value) %>%
-        gt() %>%
-        fmt_number(columns = Total_Sacos, decimals = 2) %>%
-        tab_style(
-          style     = cell_text(weight = "bold", size = px(14)),
-          locations = cells_body(columns = Tipo_Negocio)
-        ) %>%
-        tab_style(
-          style     = cell_text(size = px(12)),
-          locations = cells_body(columns = Total_Sacos)
-        ) %>%
-        tab_style(
-          style     = cell_borders(
-            sides = c("top", "bottom", "left", "right"), color = "transparent"
+      reactable::reactable(
+        tabla,
+        compact    = TRUE,
+        pagination = FALSE,
+        bordered   = FALSE,
+        highlight  = TRUE,
+        columns = list(
+          Item  = reactable::colDef(
+            name     = "Indicador",
+            minWidth = 160,
+            style    = list(fontWeight = "600", fontSize = "11px", color = "#374151")
           ),
-          locations = cells_body()
-        ) %>%
-        gt_minimal_style() %>%
-        tab_source_note(source_note = md(texto)) %>%
-        tab_options(column_labels.hidden = TRUE)
-    })
-    
-    output$last_update <- renderUI({
-      req(dat())
-      FormatearTexto(
-        paste("Ultima actualizacion:", dat()$last_updated[1]) %>% HTML,
-        tamano_pct = 0.6
+          Valor = reactable::colDef(
+            name = "Valor", html = TRUE, maxWidth = 95, align = "right"
+          )
+        ),
+        theme = reactable::reactableTheme(
+          headerStyle = list(fontWeight = "700", fontSize = "10px", color = "#64748B"),
+          cellStyle   = list(fontSize = "11px", padding = "3px 8px")
+        )
       )
     })
     
-    output$refresh_button <- renderUI({
-      actionBttn(session$ns("refresh_indicators"), icon = icon("sync"), size = "xs")
+    # Disponible — reactive con guard de error ----
+    disponible_r <- shiny::reactive({
+      tryCatch(
+        readRDS(file.path(
+          "/home/htamara/6_IndustriaNacional",
+          "CRM Cliente Nacional/CRMNacional/data/cafexasignar.rds"
+        )),
+        error = function(e) { warning("[Indicadores] ", e$message); NULL }
+      )
     })
     
-    reactive(input$refresh_indicators)
+    output$tabla_disponible <- reactable::renderReactable({
+      df <- disponible_r()
+      shiny::req(!is.null(df))
+      
+      df_tbl <- df %>%
+        dplyr::filter(Tipo_Negocio == "Disponible") %>%
+        dplyr::select(Total_Sacos, PrecioxCarga) %>%
+        tidyr::pivot_longer(
+          cols      = Total_Sacos:PrecioxCarga,
+          names_to  = "Concepto",
+          values_to = "Valor"
+        ) %>%
+        dplyr::mutate(
+          Concepto = dplyr::recode(
+            Concepto, "Total_Sacos" = "Sacos", "PrecioxCarga" = "Precio / Carga"
+          )
+        )
+      
+      reactable::reactable(
+        df_tbl,
+        compact    = TRUE,
+        pagination = FALSE,
+        bordered   = FALSE,
+        columns = list(
+          Concepto = reactable::colDef(
+            name  = "Concepto",
+            style = list(fontWeight = "600", fontSize = "11px", color = "#374151")
+          ),
+          Valor = reactable::colDef(
+            name   = "Valor",
+            format = reactable::colFormat(separators = TRUE, digits = 2),
+            align  = "right", maxWidth = 95
+          )
+        ),
+        theme = reactable::reactableTheme(
+          headerStyle = list(display = "none"),
+          cellStyle   = list(fontSize = "11px", padding = "2px 8px")
+        )
+      )
+    })
+    
+    # Pie con fecha de cierre de la posición disponible ----
+    output$pie_disponible <- shiny::renderUI({
+      df <- disponible_r()
+      shiny::req(!is.null(df))
+      fecha <- tryCatch(
+        format(max(df$Fecha, na.rm = TRUE), "%d %b %Y"),
+        error = function(e) "\u2014"
+      )
+      shiny::tags$p(
+        style = "font-size:10px;color:#64748B;padding:2px 10px 6px;margin:0;",
+        sprintf(" Posición con cierre al %s", fecha)
+      )
+    })
+    
+    list(n = shiny::reactive(if (!is.null(dat())) nrow(dat()) else 0L))
   })
 }
 

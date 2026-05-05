@@ -1,14 +1,14 @@
 footer <- bs4DashFooter(
   left = div(
-    style = "display:flex; align-items:center; margin:0;",
-    tags$span(style = "margin-left:5px;", uiOutput("last_update_info"))
+    tags$a(style = paste("display:flex;align-items:center;", "gap:14px;padding:8px 12px;cursor:default;"),
+           tags$span(style = "margin-left:5px;", 
+                     uiOutput("last_update_info")
+                     )
+           )
   ),
-  right = div(
-    style = "display:flex; align-items:center; margin:0;",
-    FormatearTexto(
-      str_to_title(paste(tit_app, "Versión 2.0")),
-      tamano_pct = 0.6
-    )
-  ),
+  right = tags$img(
+    src = "https://raw.githubusercontent.com/HCamiloYateT/Compartido/main/img/logo.png",
+    style = "height:30px;"
+    ),
   fixed = TRUE
 )

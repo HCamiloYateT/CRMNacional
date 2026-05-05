@@ -60,66 +60,53 @@ ProductoUI <- function(id, num, dat) {
                                           )
                               ),
                        column(6,
-                              InputNumerico(ns("Cantidad2"), label = Obligatorio("Cantidad (Kilos)"), value = NULL,
-                                            type = "numero"),
                               autonumericInput(ns("Cantidad2"), label = Obligatorio("Cantidad (Kilos)"), value = NULL,
                                                decimalPlaces = 1, width = "100%",
                                                minimumValue = 1, currencySymbol = " kilos",
                                                currencySymbolPlacement = "s",
                                                style = "height: 25px !important; font-size: 14px;"
                                                )
-        )
-      ),
-      fluidRow(
-        column(6,
-               ListaDesplegable(
-                 ns("Presentacion"), label = Obligatorio("Presentación"),
-                 choices = c(
-                   "", "Sacos de 70kgs", "Sacos de 62.5Kgs",
-                   "Sacos de 35Kgs", "Grainpro 70kgs"
-                 ),
-                 selected = NULL, multiple = FALSE
-               )
-        ),
-        column(6,
-               ListaDesplegable(
-                 ns("Empaque"), label = Obligatorio("Empaque"),
-                 choices = c(
-                   "", "Blanco #6", "Premarcado #7",
-                   "Premarcado #7 Arte del cliente"
-                 ),
-                 selected = NULL, multiple = FALSE
-               )
-        )
-      ),
-      fluidRow(
-        column(6,
-               autonumericInput(
-                 ns("Precio"), label = Obligatorio("Precio por Kilo"),
-                 value = NULL, decimalPlaces = 0, currencySymbol = "$",
-                 width = "100%",
-                 style = "height: 25px !important; font-size: 14px;"
-               )
-        ),
-        column(6,
-               div(
-                 style = "margin-top: 25px;",
-                 h6("Total: ",
-                    span(id = ns("Total"), "$0",
-                         style = "font-weight: bold; color: #000;"))
-               )
-        )
-      )
+                              )
+                       ),
+                     fluidRow(
+                       column(6,
+                              ListaDesplegable(ns("Presentacion"), label = Obligatorio("Presentación"),
+                                               choices = c("", "Sacos de 70kgs", "Sacos de 62.5Kgs",
+                                                           "Sacos de 35Kgs", "Grainpro 70kgs"),
+                                               selected = NULL, multiple = FALSE
+                                               )
+                              ),
+                       column(6,
+                              ListaDesplegable(ns("Empaque"), label = Obligatorio("Empaque"),
+                                               choices = c("", "Blanco #6", "Premarcado #7",
+                                                           "Premarcado #7 Arte del cliente"),
+                                               selected = NULL, multiple = FALSE
+                                               )
+                              )
+                       ),
+                     fluidRow(
+                       column(6,
+                              autonumericInput(ns("Precio"), label = Obligatorio("Precio por Kilo"),
+                                               value = NULL, decimalPlaces = 0, currencySymbol = "$",
+                                               width = "100%",
+                                               style = "height: 25px !important; font-size: 14px;"
+                                               )
+                              ),
+                       column(6,
+                              div(style = "margin-top: 25px;",
+                                  h6("Total: ", span(id = ns("Total"), "$0",
+                                                     style = "font-weight: bold; color: #000;"))
+                                  )
+                              )
+                       )
+                     )
     )
-  )
-}
-
+  }
 Producto <- function(id, dat) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
     
     # Cascada de selectores: Línea → Categoría → Producto ----
-    # dat se recibe ya evaluado (data.frame estático) desde crear_nuevo_producto().
     observeEvent(input$LinNeg, {
       req(input$LinNeg)
       cho_cat <- dat %>%
@@ -129,7 +116,6 @@ Producto <- function(id, dat) {
         Unicos()
       updatePickerInput(session, "Categoria", choices = c("", cho_cat), selected = NULL)
     })
-    
     observeEvent(input$Categoria, {
       req(input$Categoria)
       cat_filtro <- ifelse(input$Categoria == "FUERA DE NORMA", "BLEND", input$Categoria)
@@ -146,7 +132,6 @@ Producto <- function(id, dat) {
       precio <- safe_num(input$Precio)
       if (cant > 0 && precio > 0) cant * precio else 0
     })
-    
     observe({
       total_fmt <- paste0(
         "$",
@@ -157,33 +142,30 @@ Producto <- function(id, dat) {
     
     # Validación de completitud del producto ----
     producto_valido <- reactive({
-      all(
-        nzchar(input$LinNeg      %||% ""),
-        nzchar(input$Categoria   %||% ""),
-        nzchar(input$Producto    %||% ""),
-        nzchar(input$Presentacion %||% ""),
-        nzchar(input$Empaque     %||% ""),
-        safe_num(input$Cantidad) > 0,
-        safe_num(input$Precio)   > 0
-      )
+      all(nzchar(input$LinNeg      %||% ""),
+          nzchar(input$Categoria   %||% ""),
+          nzchar(input$Producto    %||% ""),
+          nzchar(input$Presentacion %||% ""),
+          nzchar(input$Empaque     %||% ""),
+          safe_num(input$Cantidad) > 0,
+          safe_num(input$Precio)   > 0)
     })
     
     # Contrato de retorno del módulo ----
     return(reactive({
-      list(
-        LinNeg       = input$LinNeg       %||% "",
-        Categoria    = input$Categoria    %||% "",
-        Producto     = input$Producto     %||% "",
-        Presentacion = input$Presentacion %||% "",
-        Empaque      = input$Empaque      %||% "",
-        Cantidad     = safe_num(input$Cantidad),
-        Precio       = safe_num(input$Precio),
-        Total        = total_producto(),
-        Valido       = producto_valido()
-      )
-    }))
-  })
-}
+      list(LinNeg       = input$LinNeg       %||% "",
+           Categoria    = input$Categoria    %||% "",
+           Producto     = input$Producto     %||% "",
+           Presentacion = input$Presentacion %||% "",
+           Empaque      = input$Empaque      %||% "",
+           Cantidad     = safe_num(input$Cantidad),
+           Precio       = safe_num(input$Precio),
+           Total        = total_producto(),
+           Valido       = producto_valido()
+           )
+      }))
+    })
+  }
 
 # Módulo Cotizador ----
 CotizacionUI <- function(id) {
@@ -294,7 +276,6 @@ CotizacionUI <- function(id) {
     )
   )
 }
-
 Cotizacion <- function(id, usr, dat) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns

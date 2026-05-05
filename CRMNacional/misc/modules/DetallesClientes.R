@@ -190,12 +190,20 @@ dc_coldefs_comunes <- function(data_tabla) {
     # Primeras 3 columnas: identificación (col_header_n = 3L)
     # CORRECCIÓN Oportunidad: sin html=TRUE — TablaReactable inyecta el HTML del botón
     # internamente vía cols_activos; nuestro colDef sólo define clase y ancho.
-    Oportunidad = reactable::colDef(
-      name     = "",
-      minWidth = 70,
-      class    = "rt-col-header",
-      sortable = FALSE
-    ),
+    Oportunidad = reactable::colDef(name     = "",
+                                    minWidth = 70,
+                                    html     = TRUE,
+                                    sortable = FALSE,
+                                    cell     = function(v) {
+                                      if (is.na(v) || v == "") return("")
+                                      as.character(tags$span(style = paste("display:inline-flex; align-items:center; justify-content:center;",
+                                                                           "width:28px; height:28px; border-radius:6px;",
+                                                                           "background:#C11007; color:white; font-size:13px; cursor:pointer;"
+                                                                           ),
+                                                             icon("hand-holding-dollar")
+                                      ))
+                                      }
+                                    ),
     # CORRECCIÓN PerRazSoc: html=TRUE necesario para que crear_link_cliente renderice
     # como enlace HTML y no como texto plano escapado.
     PerRazSoc = reactable::colDef(
@@ -520,7 +528,6 @@ DetalleClienteUI <- function(id) {
     )
   )
 }
-
 DetalleCliente <- function(id, dat, usr, trigger_update) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
