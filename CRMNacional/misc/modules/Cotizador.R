@@ -1,9 +1,3 @@
-# =============================================================================
-# Módulo Cotizador — Industria Nacional
-# Refactorizado: eliminación de duplicados, batch insert, helpers centralizados,
-# tabla de encabezado declarativa, separación extracción/formateo PDF.
-# =============================================================================
-
 # Datos de referencia ----
 # Tabla estática de vendedores; no consulta BD en cada operación.
 VENDEDORES_DATA <- data.frame(
