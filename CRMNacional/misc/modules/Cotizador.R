@@ -31,51 +31,43 @@ safe_num <- function(x) {
 # FIX #4: CargarDatos("CRMNALLEAD") se llama UNA sola vez aquí; el resultado
 # se reutiliza también en obtener_datos_cliente() via el parámetro leads_data.
 .leads_startup <- CargarDatos("CRMNALLEAD")
-persona <- c(
-  Unicos(data$PerRazSoc),
-  Unicos(.leads_startup %>% pull(PerRazSoc))
-)
+persona <- c(Unicos(data$PerRazSoc),
+             Unicos(.leads_startup %>% pull(PerRazSoc))
+             )
 
 # Módulo Producto ----
 ProductoUI <- function(id, num, dat) {
   ns <- NS(id)
   div(
     id = ns("wrapper"),
-    bs4Dash::bs4Card(
-      title        = paste("Producto", num),
-      status       = "white",
-      solidHeader  = TRUE,
-      width        = 12,
-      collapsible  = FALSE,
-      fluidRow(
-        column(6,
-               ListaDesplegable(
-                 ns("LinNeg"), label = Obligatorio("Línea de Negocio"),
-                 choices = Choices()$linneg, selected = NULL, multiple = FALSE
-               )
-        ),
-        column(6,
-               ListaDesplegable(
-                 ns("Categoria"), label = Obligatorio("Categoría"),
-                 choices = Choices()$categoria, selected = NULL, multiple = FALSE
-               )
-        )
-      ),
-      fluidRow(
-        column(6,
-               pickerInput(
-                 ns("Producto"), label = Obligatorio("Producto"),
-                 width = "100%", choices = "", options = pick_opt(NULL)
-               )
-        ),
-        column(6,
-               autonumericInput(
-                 ns("Cantidad"), label = Obligatorio("Cantidad (Kilos)"),
-                 value = NULL, decimalPlaces = 1, width = "100%",
-                 minimumValue = 1, currencySymbol = " kilos",
-                 currencySymbolPlacement = "s",
-                 style = "height: 25px !important; font-size: 14px;"
-               )
+    bs4Dash::bs4Card(title = paste("Producto", num), status = "white",
+                     solidHeader  = TRUE, width = 12, collapsible  = FALSE, 
+                     fluidRow(
+                       column(6,
+                              ListaDesplegable(ns("LinNeg"), label = Obligatorio("Línea de Negocio"),
+                                               choices = Choices()$linneg, selected = NULL, multiple = FALSE)
+                              ),
+                       column(6,
+                              ListaDesplegable(ns("Categoria"), label = Obligatorio("Categoría"),
+                                               choices = Choices()$categoria, selected = NULL, multiple = FALSE
+                                               )
+                              )
+                       ),
+                     fluidRow(
+                       column(6,
+                              pickerInput(ns("Producto"), label = Obligatorio("Producto"),
+                                          width = "100%", choices = "", options = pick_opt(NULL)
+                                          )
+                              ),
+                       column(6,
+                              InputNumerico(ns("Cantidad2"), label = Obligatorio("Cantidad (Kilos)"), value = NULL,
+                                            type = "numero"),
+                              autonumericInput(ns("Cantidad2"), label = Obligatorio("Cantidad (Kilos)"), value = NULL,
+                                               decimalPlaces = 1, width = "100%",
+                                               minimumValue = 1, currencySymbol = " kilos",
+                                               currencySymbolPlacement = "s",
+                                               style = "height: 25px !important; font-size: 14px;"
+                                               )
         )
       ),
       fluidRow(
