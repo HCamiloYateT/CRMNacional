@@ -7,7 +7,6 @@ options(
 )
 
 tit_app = "CRM Nacional"
-estilo_tablas = ""
 
 # Credenciales
 uid = Sys.getenv("SYS_UID")
@@ -21,14 +20,10 @@ required_packages <- c("shiny", "bs4Dash", "shinyBS", "shinyjs", "shinytoastr", 
                        "fabletools", "tsibble", "forecast", "prophet", "fable", "racafeModulos")
 racafe::Loadpkg(required_packages)
 
-# Carga de datos y funciones
+# Carga de scripts utilitarios
 load("data/data.RData")
 .fecha_min   <- min(data$FecFact, na.rm = TRUE)
 .fecha_max   <- max(data$FecFact, na.rm = TRUE)
-source("misc/functions.R")
-source("misc/values.R")
-.app_choices <- Choices()
-source("misc/filters.R")
 
 load_modules <- function(path = "misc", verbose = FALSE, progress = TRUE) {
   
@@ -100,6 +95,7 @@ load_modules <- function(path = "misc", verbose = FALSE, progress = TRUE) {
       } else {
         fallidos_pasada <- c(fallidos_pasada, f)
         errores[[f]]    <- resultado
+        if (!use_pb) message(sprintf("  [FAIL] %s\n         -> %s", f, resultado))
       }
     }
     
@@ -115,9 +111,14 @@ load_modules <- function(path = "misc", verbose = FALSE, progress = TRUE) {
     }
     
     # Hay progreso pero quedan fallidos: reintentar en siguiente pasada
-    if (verbose && length(fallidos_pasada) > 0L) {
-      message(sprintf("[RETRY] Pasada %d: reintentando %d archivo(s) fallido(s)",
+    if (length(fallidos_pasada) > 0L && length(fallidos_pasada) < length(pendientes)) {
+      # Hay progreso pero quedan fallidos: reportar siempre, con el error de cada uno
+      message(sprintf("[RETRY] Pasada %d: %d archivo(s) con error, reintentando:",
                       pasada, length(fallidos_pasada)))
+      if (use_pb) {
+        # En modo pb los fallos no se imprimieron inline: mostrarlos aquí
+        purrr::walk(fallidos_pasada, ~ message(sprintf("  [FAIL] %s\n         -> %s", .x, errores[[.x]])))
+      }
     }
     
     pendientes <- fallidos_pasada
@@ -134,3 +135,5 @@ load_modules <- function(path = "misc", verbose = FALSE, progress = TRUE) {
   invisible(list(ok = length(cargados), fallidos = names(errores), errores = errores))
 }
 load_modules(verbose = TRUE)
+
+.app_choices <- Choices()

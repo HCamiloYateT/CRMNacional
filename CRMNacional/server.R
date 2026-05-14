@@ -1,26 +1,30 @@
 server <- function(input, output, session) {
-
+  
   # Helpers ----
-
-  # Niveles estandar de segmento analitico RFM
+  
+  # Niveles estándar de segmento analítico RFM
   .rfm_levels <- c(
     "CAMPEONES", "CLIENTES LEALES", "POTENCIALES LEALES", "NUEVOS CLIENTES",
     "PROMETEDORES", "NECESITAN ATENCIÓN", "A PUNTO DE DORMIR", "EN RIESGO",
     "NO PODEMOS PERDERLOS", "HIBERNANDO", "PERDIDOS", "NUEVOS EN BASE", "OTROS"
   )
-
-  # Columnas de facturacion horneadas en datos_rv() que se reemplazan con fuente viva
+  
+  # Columnas de facturación horneadas en datos_rv() que se reemplazan con fuente viva
   .cols_fact_stale <- c(
     "FcnTip", "FecPrimerFact", "FecFact", "KilosFact",
     "SacosFact", "SacFact70", "Margen", "SacosPYG", "Facturado", "MarKilo"
   )
-
-  # Factory de cache con invalidacion y actualizacion manual
-  create_cache <- function(loader_fn, process_fn = NULL) {
+  
+  # Factory de cache con invalidación, actualización manual y TTL opcional en minutos
+  create_cache <- function(loader_fn, process_fn = NULL, ttl_mins = NULL) {
     data_cache  <- reactiveVal(NULL)
     last_update <- reactiveVal(Sys.time())
     get_data <- function() {
-      if (is.null(isolate(data_cache()))) {
+      cached      <- isolate(data_cache())
+      tiempo_mins <- difftime(Sys.time(), isolate(last_update()), units = "mins")
+      needs_refresh <- is.null(cached) ||
+        (!is.null(ttl_mins) && tiempo_mins > ttl_mins)
+      if (needs_refresh) {
         tryCatch(
           {
             raw    <- loader_fn()
@@ -43,7 +47,7 @@ server <- function(input, output, session) {
       last_update = last_update
     )
   }
-
+  
   # Snapshot por grupo: retiene la fila con max(FecProceso) por grupo
   .snapshot_max <- function(dat, ...) {
     grp_vars <- rlang::enquos(...)
@@ -53,8 +57,8 @@ server <- function(input, output, session) {
       slice(1) %>%
       ungroup()
   }
-
-  # Snapshot RFM: aplica .snapshot_max y renombra columnas con sufijo
+  
+  # Snapshot RFM: aplica .snapshot_max y renombra columnas con sufijo dado
   .process_rfm <- function(dat, suffix) {
     cols_rfm <- c(
       "SegmentoAnalitica", "rfm_score", "transaction_count",
@@ -66,8 +70,8 @@ server <- function(input, output, session) {
       select(LinNegCod, CliNitPpal, all_of(cols_rfm)) %>%
       rename_with(~ paste0(.x, suffix), all_of(cols_rfm))
   }
-
-  # Join temporal de CRMNALCLIENTE segun modo DINAMICO o ESTATICO
+  
+  # Join temporal de CRMNALCLIENTE según modo DINÁMICO o ESTÁTICO
   # Preserva todas las filas de dat_fact independientemente del match en clientes
   .join_clientes <- function(dat_fact, clientes_raw, modo, cols_select) {
     snap_cols    <- c("LinNegCod", "CliNitPpal", "FecProceso", cols_select)
@@ -83,7 +87,7 @@ server <- function(input, output, session) {
       return(left_join(dat_fact, snap, by = c("CliNitPpal", "LinNegCod")))
     }
     
-    # ESTATICO: FecProceso mas reciente <= FecFact; filas sin match se conservan con NA
+    # ESTÁTICO: FecProceso más reciente <= FecFact; filas sin match se conservan con NA
     dat_con_id <- dat_fact %>% mutate(.row_id = row_number())
     
     snap_validos <- dat_con_id %>%
@@ -91,10 +95,8 @@ server <- function(input, output, session) {
         clientes_sel, by = c("CliNitPpal", "LinNegCod"),
         relationship = "many-to-many"
       ) %>%
-      # Solo FecProceso historico respecto a la factura (o lote sin fecha de factura)
       filter(is.na(FecFact) | FecProceso <= as.Date(FecFact)) %>%
       group_by(.row_id) %>%
-      # El mas reciente snapshot valido por lote
       filter(FecProceso == max(FecProceso, na.rm = TRUE)) %>%
       slice(1) %>%
       ungroup()
@@ -102,13 +104,11 @@ server <- function(input, output, session) {
     sin_snap <- dat_con_id %>%
       filter(!.row_id %in% snap_validos$.row_id)
     
-    # Combinar, ordenar por row_id original y limpiar columnas auxiliares
     bind_rows(snap_validos, sin_snap) %>%
       arrange(.row_id) %>%
       select(-.row_id, -FecProceso)
-    
   }
-
+  
   # Factory de reactivo RFM: sin preloader, opera sobre data_f() ya cacheado
   .rfm_reactive <- function(seg_racafe, col_seg, col_recency, col_count, col_amount) {
     reactive({
@@ -129,46 +129,43 @@ server <- function(input, output, session) {
         )
     })
   }
-
-  # Inicializacion ----
-
-  # Captura del usuario con fallback
+  
+  # Inicialización ----
+  
+  # Captura del usuario con fallback para desarrollo local
   usuario <- reactive({
     if (is.null(session$user)) "JGCANON" else str_to_upper(session$user)
   })
-
-  # Llamada a valores de los filtros
+  
   filtros <- FiltrosServer("Filtros", usuario, productos_cache)
-  observe({
-    f <- filtros()
-    assign("f", f, envir = .GlobalEnv) # [DEBUG]
-    
-  })
-
+  # [DEBUG] observe({ f <- filtros(); assign("f", f, envir = .GlobalEnv) })
+  
   # Valores reactivos base cargados desde DataPrep
   datos_rv    <- reactiveVal(data)
   ncliente_rv <- reactiveVal(NCLIENTE)
   fact_rv     <- reactiveVal(FACT)
-
+  
   # Cache ----
-
-  ## Clientes en bruto desde CRMNALCLIENTE
+  
+  ## Clientes en bruto desde CRMNALCLIENTE (fuente única para todos los consumidores)
   clientes_raw_cache <- create_cache(loader_fn = function() {
     CargarDatos("CRMNALCLIENTE") %>%
       mutate(
         FecProceso = as.Date(FecProceso),
         across(where(is.numeric),   ~ ifelse(is.na(.), 0, .)),
         across(where(is.character), ~ ifelse(is.na(.) | . == "N/A", "", .))
-      ) %>% 
-      left_join(CargarDatos("CRMNALLOCAL") %>% 
-                  mutate(FecProceso = as.Date(FecProceso)) %>% 
-                  group_by(CliNitPpal) %>% 
-                  filter(FecProceso == max(FecProceso)), 
-                by = join_by(FecProceso, Usr, CliNitPpal)) %>% 
+      ) %>%
+      left_join(
+        CargarDatos("CRMNALLOCAL") %>%
+          mutate(FecProceso = as.Date(FecProceso)) %>%
+          group_by(CliNitPpal) %>%
+          filter(FecProceso == max(FecProceso)),
+        by = join_by(FecProceso, Usr, CliNitPpal)
+      ) %>%
       mutate(LinNegocio = ifelse(LinNegCod == 10000, "CONVENCIONALES", "A LA MEDIDA"))
   })
-
-  ## Pendientes de produccion, despacho y facturacion desde EXPCUALO
+  
+  ## Pendientes de producción, despacho y facturación desde EXPCUALO
   pend_cache <- create_cache(loader_fn = function() {
     ConsultaSistema(
       "syscafe",
@@ -178,31 +175,39 @@ server <- function(input, output, session) {
          AND  CLCliNit <> 32 AND CLLinNegCo <> 0 AND CLLotCan > 0"
     )
   })
-
-  ## Segmento Racafe: ultimo snapshot por cliente y linea
+  
+  ## Segmento Racafe en bruto: todas las fechas disponibles para análisis histórico
+  # output$ClientesRecuperar necesita dos snapshots consecutivos; no puede usar
+  # segmentos_cache que solo expone el último
+  segmentos_raw_cache <- create_cache(
+    loader_fn = function() {
+      CargarDatos("CRMNALSEGR") %>% mutate(FecProceso = as.Date(FecProceso))
+    }
+  )
+  
+  ## Segmento Racafe: último snapshot por cliente y línea (derivado del raw)
   segmentos_cache <- create_cache(
-    loader_fn  = function() CargarDatos("CRMNALSEGR"),
+    loader_fn  = function() segmentos_raw_cache$get(),
     process_fn = function(dat) {
       dat %>%
-        mutate(FecProceso = as.Date(FecProceso)) %>%
         filter(FecProceso == max(FecProceso)) %>%
         select(LinNegCod, CliNitPpal, SegmentoRacafe)
     }
   )
-
+  
   ## RFM por sacos: snapshot con sufijo S
   rfm_cache <- create_cache(
     loader_fn  = function() CargarDatos("CRMNALRFM"),
     process_fn = function(dat) .process_rfm(dat, "S")
   )
-
+  
   ## RFM por margen: snapshot con sufijo M
   rfmm_cache <- create_cache(
     loader_fn  = function() CargarDatos("CRMNALRFMM"),
     process_fn = function(dat) .process_rfm(dat, "M")
   )
-
-  ## Customer Lifetime Value: ultimo snapshot por cliente
+  
+  ## Customer Lifetime Value: último snapshot por cliente
   clv_cache <- create_cache(
     loader_fn  = function() CargarDatos("CRMNALCLV"),
     process_fn = function(dat) {
@@ -215,8 +220,8 @@ server <- function(input, output, session) {
         select(CliNitPpal, Churn, SacosPred)
     }
   )
-
-  ## Productos: ultimo snapshot por clave de producto
+  
+  ## Productos: último snapshot por clave de producto
   productos_cache <- create_cache(
     loader_fn  = function() CargarDatos("CRMNALPRODS"),
     process_fn = function(dat) {
@@ -228,13 +233,13 @@ server <- function(input, output, session) {
         ungroup()
     }
   )
-
-  ## Ordenes de compra por lote
+  
+  ## Órdenes de compra por lote
   ordcmp_cache <- create_cache(loader_fn = function() {
     CargarDatos("CRMNALORDCMP") %>% select(CLLotCod = Lote, OrdenCompra)
   })
-
-  ## Facturacion viva por lote: colapsada a una fila en process_fn (ejecuta una vez)
+  
+  ## Facturación viva por lote: colapsada a una fila en process_fn (ejecuta una vez)
   fact_cache <- create_cache(
     loader_fn  = cargar_fact,
     process_fn = function(dat) {
@@ -247,7 +252,7 @@ server <- function(input, output, session) {
           KilosFact     = sum(KilosFact,     na.rm = TRUE),
           SacosFact     = sum(SacosFact,     na.rm = TRUE),
           SacFact70     = sum(SacFact70,     na.rm = TRUE),
-          # NA cuando todos los registros del lote son NA: preserva imputacion jerarquica
+          # NA cuando todos los registros del lote son NA: preserva imputación jerárquica
           Margen   = if_else(all(is.na(Margen)),   NA_real_, sum(Margen,   na.rm = TRUE)),
           SacosPYG = if_else(all(is.na(SacosPYG)), NA_real_, sum(SacosPYG, na.rm = TRUE)),
           Facturado = any(coalesce(Facturado, FALSE)),
@@ -255,59 +260,67 @@ server <- function(input, output, session) {
         )
     }
   )
-
-  ## Lineas de negocio: tabla cuasi-estatica del sistema transaccional
+  
+  ## Líneas de negocio: tabla cuasi-estática del sistema transaccional
   linneg_cache <- create_cache(loader_fn = function() {
     ConsultaSistema(
       "syscafe",
       "SELECT LinNegCod, LinNegNom AS LinNeg FROM NLINEANE WHERE CiaCod = 10"
     )
   })
-
-  ## Tipos de producto: tabla cuasi-estatica del sistema transaccional
+  
+  ## Tipos de producto: tabla cuasi-estática del sistema transaccional
   linpro_cache <- create_cache(loader_fn = function() {
     ConsultaSistema(
       "syscafe",
       "SELECT LinProCod, LinProNom FROM NTIPPROD WHERE CiaCod = 10"
     )
   })
-
-  ## Lotes asignados a pedido: invalida con actualizacion manual
+  
+  ## Catálogo de comercializaciones: cuasi-estático del sistema transaccional
+  nmarcom_cache <- create_cache(loader_fn = function() {
+    ConsultaSistema("syscafe", "SELECT MCCod, MCNom FROM NMARCOM")
+  })
+  
+  ## Catálogo de marcas: cuasi-estático del sistema transaccional
+  nmarcas_cache <- create_cache(loader_fn = function() {
+    ConsultaSistema("syscafe", "SELECT MrcCod, MrcNom AS Marca FROM NMARCAS")
+  })
+  
+  ## Lotes asignados a pedido
   lotes_asig_cache <- create_cache(loader_fn = function() {
     ConsultaSistema("syscafe", "SELECT PdcCod, PdcLin FROM EXPLOT1")
   })
-
-  ## Lista nombrada de todos los caches para actualizacion en lote
-  all_caches <- list(
-    pend       = pend_cache,
-    clientes   = clientes_raw_cache,
-    segmentos  = segmentos_cache,
-    rfm        = rfm_cache,
-    rfmm       = rfmm_cache,
-    clv        = clv_cache,
-    productos  = productos_cache,
-    ordcmp     = ordcmp_cache,
-    fact       = fact_cache,
-    linneg     = linneg_cache,
-    linpro     = linpro_cache,
-    lotes_asig = lotes_asig_cache
+  
+  ## Leads: fuente única; data_leads_f() aplica filtros sobre este cache
+  leads_cache <- create_cache(loader_fn = function() {
+    CargarDatos("CRMNALLEAD") %>%
+      mutate(
+        AutorizaTD = "SI",  # TODO: reemplazar cuando llegue el campo real del sistema
+        LinNegocio = ifelse(LinNegCod == 10000, "CONVENCIONALES", "A LA MEDIDA")
+      )
+  })
+  
+  ## Oportunidades: fuente única; data_oportunidades_f() aplica filtros sobre este cache
+  oportunidades_cache <- create_cache(
+    loader_fn = function() CargarDatos("CRMNALCLOPT")
   )
-
-  ## Trigger de actualizacion manual de oportunidades
-  trigger_update_opt <- reactiveVal(0)
-
-  # Datos ----
-
-  ## Indicadores de precio ----
-  indicators_cache <- reactiveVal(NULL)
-  last_update_time <- reactiveVal(Sys.time() - 3600)
-  data_ind <- reactive({
-    waiter_show(html = preloader_actualizar$html, color = preloader_actualizar$color)
-    on.exit(waiter_hide())
-    current_time <- Sys.time()
-    needs_update <- is.null(indicators_cache()) ||
-      difftime(current_time, last_update_time(), units = "mins") > 30
-    if (needs_update) {
+  
+  ## Competencia: fuente única; data_competencia_f() filtra por usuario
+  competencia_cache <- create_cache(
+    loader_fn = function() CargarDatos("CRMNALCOMPETENCIA")
+  )
+  
+  ## Notas y tareas: fuente única de carga; notes_data (reactiveVal) es el punto de acceso
+  notas_cache <- create_cache(
+    loader_fn = function() CargarDatos("CRMNALNOTAS")
+  )
+  
+  ## Indicadores de precio: TTL de 30 minutos integrado al factory
+  # Migrado desde implementación manual con dos reactiveVal y difftime inline
+  indicadores_cache <- create_cache(
+    ttl_mins  = 30,
+    loader_fn = function() {
       fnc_data    <- get_fnc_data()
       system_data <- get_system_data(uid, pwd)
       item_names  <- c(
@@ -328,7 +341,7 @@ server <- function(input, output, session) {
         COMRipio    = "Precio Ripio (Compras)",
         COMRobusta  = "Precio Robusta (Compras)"
       )
-      result <- data.frame(
+      data.frame(
         PrecioBolsa = fnc_data$bolsa,
         TRM         = system_data$trm,
         PrecioFNC   = fnc_data$precio,
@@ -348,51 +361,85 @@ server <- function(input, output, session) {
       ) %>%
         pivot_longer(cols = everything(), names_to = "Item", values_to = "Valor") %>%
         mutate(
-          Item         = recode(Item, !!!item_names),
-          Item         = factor(Item, levels = item_names),
-          last_updated = format(current_time, "%Y-%m-%d %H:%M:%S")
+          Item = recode(Item, !!!item_names),
+          Item = factor(Item, levels = item_names)
         )
-      indicators_cache(result)
-      last_update_time(current_time)
     }
-    indicators_cache()
+  )
+  
+  ## Lista nombrada de todos los caches para actualización en lote
+  # segmentos_raw debe preceder a segmentos para respetar la cadena de dependencia
+  all_caches <- list(
+    pend          = pend_cache,
+    clientes      = clientes_raw_cache,
+    segmentos_raw = segmentos_raw_cache,
+    segmentos     = segmentos_cache,
+    rfm           = rfm_cache,
+    rfmm          = rfmm_cache,
+    clv           = clv_cache,
+    productos     = productos_cache,
+    ordcmp        = ordcmp_cache,
+    fact          = fact_cache,
+    linneg        = linneg_cache,
+    linpro        = linpro_cache,
+    nmarcom       = nmarcom_cache,
+    nmarcas       = nmarcas_cache,
+    lotes_asig    = lotes_asig_cache,
+    leads         = leads_cache,
+    oportunidades = oportunidades_cache,
+    competencia   = competencia_cache,
+    notas         = notas_cache,
+    indicadores   = indicadores_cache
+  )
+  
+  ## Trigger de actualización manual de oportunidades
+  trigger_update_opt <- reactiveVal(0)
+  
+  # Datos ----
+  
+  ## Indicadores de precio ----
+  data_ind <- reactive({
+    waiter_show(html = preloader_actualizar$html, color = preloader_actualizar$color)
+    on.exit(waiter_hide())
+    indicadores_cache$get()
   })
   
   ## Notas y Tareas ----
-  notes_data <- reactiveVal(CargarDatos("CRMNALNOTAS"))
-
-  ## Clientes en bruto: snapshots derivados del cache ----
-
+  # reactiveVal: los módulos TaskCreation y noteDisplay escriben vía notes_data(nuevo)
+  # La carga inicial viene del cache; FT_Actualizar sincroniza tras el refresh completo
+  notes_data <- reactiveVal(notas_cache$get())
+  
+  ## Clientes en bruto: snapshots derivados del cache centralizado ----
   clientes_raw <- reactive({ clientes_raw_cache$get() })
-  observeEvent(clientes_raw(), { assign("clientes_raw_r", clientes_raw(), envir = .GlobalEnv) }) # [DEBUG]
-
-  # Snapshot dinamico para ped_sinlote
+  # [DEBUG] observeEvent(clientes_raw(), { assign("clientes_raw_r", clientes_raw(), envir = .GlobalEnv) })
+  
+  # Snapshot dinámico para ped_sinlote
   clientes_sinlote <- reactive({
     clientes_raw_cache$get() %>%
       .snapshot_max(LinNegCod, CliNitPpal) %>%
       select(LinNegCod, PerCod = CLCliNit, Segmento) %>%
       distinct()
   })
-
-  # Snapshot completo por cliente y linea
+  
+  # Snapshot completo por cliente y línea
   clientes_snap <- reactive({
     clientes_raw_cache$get() %>% .snapshot_max(LinNegCod, CliNitPpal)
   })
-
+  
   ## Columnas de CRMNALCLIENTE a incorporar al cuadro de lotes
   .cols_cli <- c(
     "Asesor", "Segmento", "Depto", "Mpio",
     "NumMesesRecuperar", PptoSacos = "SSPpto", PptoMargen = "MNFCCPpto",
     "Excluir"
   )
-
-  ## Lotes ----
+  
+  ## Lotes enriquecidos: reactivo pesado, invalida solo con cambios de datos base ----
   data_lotes_enriquecidos <- reactive({
     datos_rv() %>%
       select(-any_of(.cols_fact_stale)) %>%
       left_join(pend_cache$get(), by = c("CLSucCod", "CLLotCod")) %>%
       left_join(fact_cache$get(), by = "CLLotCod") %>%
-      # Imputacion jerarquica de margen por kilo (4 niveles), identica a DataPrep
+      # Imputación jerárquica de margen por kilo (4 niveles), idéntica a DataPrep
       mutate(MarKilo = Margen / KilosFact) %>%
       group_by(CLCliNit, CLLinNegNo, LinProCod, MCCod, MrcCod) %>%
       mutate(MarKilo = ifelse(is.na(MarKilo), mean(MarKilo, na.rm = TRUE), MarKilo)) %>%
@@ -412,7 +459,7 @@ server <- function(input, output, session) {
         PendProducir  = SacLote - coalesce(CLLotSacPr, 0),
         PendDespachar = pmax(SacLote - pmax(coalesce(CLLotSacDe, 0), 0), 0),
         PendFacturar  = SacLote - pmax(PendDespachar, 0) - coalesce(CLLotSacFa, 0),
-        # Patch: FCTFACN1 ya registro la factura pero EXPCUALO aun no refleja el cambio
+        # Patch: FCTFACN1 ya registró la factura pero EXPCUALO aún no refleja el cambio
         .patch     = (is.na(SacFact) | SacFact == 0) & coalesce(Facturado, FALSE),
         SacFact    = if_else(.patch, coalesce(SacosFact, SacFact), SacFact),
         CLLotDesXF = if_else(.patch, pmax(SacDesp - coalesce(SacosFact, 0), 0), CLLotDesXF),
@@ -434,9 +481,8 @@ server <- function(input, output, session) {
   })
   
   ## data_c: enriquecimiento por cliente y periodo ----
+  # Sin preloader: reactivo intermedio; el waiter pertenece únicamente a data_f()
   data_c <- reactive({
-    waiter_show(html = preloader_actualizar$html, color = preloader_actualizar$color)
-    on.exit(waiter_hide())
     f <- filtros()
     req(f$periodo)
     .join_clientes(data_lotes_enriquecidos(), clientes_raw(), f$periodo, .cols_cli) %>%
@@ -445,25 +491,31 @@ server <- function(input, output, session) {
       left_join(rfmm_cache$get(),      by = c("CliNitPpal", "LinNegCod")) %>%
       left_join(clv_cache$get(),       by = "CliNitPpal") %>%
       left_join(ordcmp_cache$get(),    by = "CLLotCod") %>%
-      mutate(SegmentoAsignadoSistema = is.na(Segmento),
-             Excluir     = ifelse(is.na(Excluir)     | Excluir     == "", "NO", Excluir),
-             ProdExcluir = ifelse(is.na(ProdExcluir) | ProdExcluir == "", "NO", ProdExcluir),
-             Segmento = case_when(!is.na(Segmento)                    ~ Segmento,
-                                  LinNegCod == 10000 & SacLote <= 240 ~ "DETAL",
-                                  LinNegCod == 10000 & SacLote >  240 ~ "MEDIANO",
-                                  LinNegCod == 21000 & SacLote <   50 ~ "DETAL",
-                                  LinNegCod == 21000 & SacLote >=  50 ~ "MEDIANO"),
-             SegmentoRacafe = ifelse(is.na(SegmentoRacafe) & !is.na(FecFact), "CLIENTE", SegmentoRacafe),
-             Asesor      = ifelse(is.na(Asesor)      | Asesor      == "", "SIN DATO", Asesor),
-             Segmento    = ifelse(is.na(Segmento)    | Segmento    == "", "SIN DATO", Segmento),
-             CLLinNegNo  = ifelse(is.na(CLLinNegNo)  | CLLinNegNo  == "", "SIN DATO", CLLinNegNo),
-             Categoria   = ifelse(is.na(Categoria)   | Categoria   == "", "SIN DATO", Categoria),
-             Producto    = ifelse(is.na(Producto)    | Producto    == "", "SIN DATO", Producto))
+      mutate(
+        SegmentoAsignadoSistema = is.na(Segmento),
+        Excluir     = ifelse(is.na(Excluir)     | Excluir     == "", "NO", Excluir),
+        ProdExcluir = ifelse(is.na(ProdExcluir) | ProdExcluir == "", "NO", ProdExcluir),
+        Segmento = case_when(
+          !is.na(Segmento)                    ~ Segmento,
+          LinNegCod == 10000 & SacLote <= 240 ~ "DETAL",
+          LinNegCod == 10000 & SacLote >  240 ~ "MEDIANO",
+          LinNegCod == 21000 & SacLote <   50 ~ "DETAL",
+          LinNegCod == 21000 & SacLote >=  50 ~ "MEDIANO"
+        ),
+        SegmentoRacafe = ifelse(
+          is.na(SegmentoRacafe) & !is.na(FecFact), "CLIENTE", SegmentoRacafe
+        ),
+        Asesor     = ifelse(is.na(Asesor)     | Asesor     == "", "SIN DATO", Asesor),
+        Segmento   = ifelse(is.na(Segmento)   | Segmento   == "", "SIN DATO", Segmento),
+        CLLinNegNo = ifelse(is.na(CLLinNegNo) | CLLinNegNo == "", "SIN DATO", CLLinNegNo),
+        Categoria  = ifelse(is.na(Categoria)  | Categoria  == "", "SIN DATO", Categoria),
+        Producto   = ifelse(is.na(Producto)   | Producto   == "", "SIN DATO", Producto)
+      )
   })
-  observeEvent(data_c(), { assign("BaseDatos_c", data_c(), envir = .GlobalEnv) }) # [DEBUG]
-
+  # [DEBUG] observeEvent(data_c(), { assign("BaseDatos_c", data_c(), envir = .GlobalEnv) })
+  
   ## data_t: filtro por dimensiones de negocio ----
-  # Sin preloader: es filter() puro sobre data_c() ya cacheado en memoria.
+  # Sin preloader: filter() puro sobre data_c() ya en memoria
   data_t <- reactive({
     f <- filtros()
     req(data_c(), f$asesor, f$segmento, f$linneg, f$categoria, f$producto)
@@ -472,19 +524,21 @@ server <- function(input, output, session) {
         Excluir    != "SI",
         Asesor     %in% f$asesor,
         Segmento   %in% f$segmento,
-        CLLinNegNo %in% f$linneg,
+        CLLinNegNo %in% f$linneg
         # Categoria  %in% f$categoria,
         # Producto   %in% f$producto
       )
   })
-  observeEvent(data_t(), { assign("BaseDatos_t", data_t(), envir = .GlobalEnv) }) # [DEBUG]
-
+  # [DEBUG] observeEvent(data_t(), { assign("BaseDatos_t", data_t(), envir = .GlobalEnv) })
+  
   ## data_f: filtro por rango de fechas de factura ----
+  # Único punto del árbol reactivo con preloader (hoja visible más costosa)
   data_f <- reactive({
+    waiter_show(html = preloader_actualizar$html, color = preloader_actualizar$color)
+    on.exit(waiter_hide())
     f <- filtros()
     req(data_t(), f$fecha)
     dat <- data_t()
-    
     if (isTRUE(f$sin_factura) && !is.null(f$fecha)) {
       dat <- dat %>%
         filter(is.na(FecFact) | (FecFact >= f$fecha[1] & FecFact <= f$fecha[2]))
@@ -493,11 +547,10 @@ server <- function(input, output, session) {
     }
     dat
   })
-  observeEvent(data_f(), { assign("BaseDatos_f", data_f(), envir = .GlobalEnv) }) # [DEBUG]
-
+  # [DEBUG] observeEvent(data_f(), { assign("BaseDatos_f", data_f(), envir = .GlobalEnv) })
+  
   ## Pedidos sin lote asignado ----
-  # Tablas de referencia (NLINEANE, NTIPPROD, EXPLOT1) servidas desde cache.
-  # Solo se ejecutan dos ConsultaSistema vivas por cada activacion del reactivo.
+  # ncliente_rv() reemplaza NCLIENTE global: refleja actualizaciones de FT_Actualizar
   ped_sinlote <- reactive({
     waiter_show(html = preloader_actualizar$html, color = preloader_actualizar$color)
     on.exit(waiter_hide())
@@ -518,7 +571,7 @@ server <- function(input, output, session) {
         ),
         by = "PdcCod"
       ) %>%
-      left_join(NCLIENTE %>% select(PerCod, PerRazSoc), by = join_by(PerCod)) %>%
+      left_join(ncliente_rv() %>% select(PerCod, PerRazSoc), by = join_by(PerCod)) %>%
       left_join(clientes_sinlote(),     by = join_by(PerCod, LinNegCod)) %>%
       anti_join(lotes_asig_cache$get(), by = join_by(PdcCod, PdcLin)) %>%
       left_join(linneg_cache$get(),     by = join_by(LinNegCod)) %>%
@@ -527,9 +580,8 @@ server <- function(input, output, session) {
       select(PerRazSoc, Segmento, PdcCod, PdcLin, PdcCan, PdcFecCre, LinNeg, LinProNom, PdcUsu) %>%
       mutate(PdcFecCre = as.Date(PdcFecCre))
   })
-  # [DEBUG]
-  observeEvent(ped_sinlote(), { assign("pedidos_sin_lote", ped_sinlote(), envir = .GlobalEnv) })
-
+  # [DEBUG] observeEvent(ped_sinlote(), { assign("pedidos_sin_lote", ped_sinlote(), envir = .GlobalEnv) })
+  
   ## RFM: cuatro reactivos derivados de data_f() ----
   data_rfm_cliente_f_s <- .rfm_reactive(
     "CLIENTE", "SegmentoAnaliticaS", "recency_daysS", "transaction_countS", "amountS"
@@ -543,56 +595,49 @@ server <- function(input, output, session) {
   data_rfm_clirec_f_m <- .rfm_reactive(
     "CLIENTE A RECUPERAR", "SegmentoAnaliticaM", "recency_daysM", "transaction_countM", "amountM"
   )
-
+  
   ## Leads ----
   rv <- reactiveValues(btn = NULL)
   v  <- FormularioLeads("Ingreso", rv = rv, usuario, tit = reactive(""))
-
+  
   data_leads_f <- reactive({
     f <- filtros()
-    CargarDatos("CRMNALLEAD") %>%
-      mutate(AutorizaTD = "SI",
-             LinNegocio = ifelse(LinNegCod == 10000, "CONVENCIONALES", "A LA MEDIDA")) %>% ######## CORREGIR
+    leads_cache$get() %>%
       filter(AutorizaTD == "SI", Segmento %in% f$segmento, LinNegocio %in% f$linneg)
   })
-  # [DEBUG]
-  observeEvent(data_leads_f(), { assign("BaseLeads", data_leads_f(), envir = .GlobalEnv) })
-
+  # [DEBUG] observeEvent(data_leads_f(), { assign("BaseLeads", data_leads_f(), envir = .GlobalEnv) })
+  
   ## Oportunidades ----
   data_oportunidades_f <- reactive({
     f <- filtros()
     req(f$linneg, f$segmento)
-    base_op <- CargarDatos("CRMNALCLOPT") %>%
+    oportunidades_cache$get() %>%
       mutate(
         Sacos70       = if_else(LinNegCod == 10000, Sacos * 62.5 / 70, Sacos),
         FechaCumpOP   = as.Date(FechaCumpOP),
         Kilos         = if_else(LinNegCod == 10000, 62.5, 70),
-        MargenTotalOP = Kilos * Sacos * Margen ,
+        MargenTotalOP = Kilos * Sacos * Margen,
         SacosMes      = SiError_0(Sacos / (FrecuenciaDias / 30)),
         MargenMes     = SiError_0(MargenTotalOP / (FrecuenciaDias / 30)),
         Descartado    = if_else(is.na(Descartado), "NO", Descartado)
-      ) 
-    facturacion_detalle <- data_c() %>%
-      mutate(FecFact = as.Date(FecFact)) %>%
-      select(PerRazSoc, LinNegCod, Categoria, Producto, FecFact, SacFact, Margen)
-    base_op %>%
+      ) %>%
       left_join(
-        facturacion_detalle,
-        by = c("PerRazSoc", "LinNegCod" = "LinNegCod", "Categoria", "Producto")
+        data_c() %>%
+          mutate(FecFact = as.Date(FecFact)) %>%
+          select(PerRazSoc, LinNegCod, Categoria, Producto, FecFact, SacFact, Margen),
+        by = c("PerRazSoc", "LinNegCod", "Categoria", "Producto")
       ) %>%
       filter(FecFact > as.Date(FecProceso)) %>%
       mutate(Cliente = PerRazSoc) %>%
       crear_link_cliente("Cliente", "LineaNegocio")
   })
-  observeEvent(data_oportunidades_f(), {
-    assign("BaseOportunidades", data_oportunidades_f(), envir = .GlobalEnv) # [DEBUG]
-  })
-
+  # [DEBUG] observeEvent(data_oportunidades_f(), { assign("BaseOportunidades", data_oportunidades_f(), envir = .GlobalEnv) })
+  
   ## Competencia ----
   data_competencia_f <- reactive({
-    CargarDatos("CRMNALCOMPETENCIA") %>% filter(UsuarioCrea %in% usuario())
+    competencia_cache$get() %>% filter(UsuarioCrea %in% usuario())
   })
-
+  
   ## Consulta individual ----
   data_individual <- reactive({
     waiter_show(html = preloader_actualizar$html, color = preloader_actualizar$color)
@@ -600,10 +645,11 @@ server <- function(input, output, session) {
     req(input$IND_Cliente, input$IND_LinNeg)
     data_c() %>% filter(PerRazSoc == input$IND_Cliente, CLLinNegNo == input$IND_LinNeg)
   })
+  # [DEBUG] observeEvent(data_individual(), { assign("BaseDatos_i", data_individual(), envir = .GlobalEnv) })
   
-  observeEvent(data_individual(), { assign("BaseDatos_i", data_individual(), envir = .GlobalEnv) }) # [DEBUG]
-
-  # Actualizacion Manual ----
+  # Actualización Manual ----
+  # walk(all_caches) invalida y recarga todos los caches en secuencia, incluyendo
+  # leads, oportunidades, competencia, notas e indicadores (antes ausentes de la lista)
   observeEvent(input$FT_Actualizar, {
     waiter_show(html = preloader_actualizar$html, color = preloader_actualizar$color)
     tryCatch(
@@ -613,50 +659,59 @@ server <- function(input, output, session) {
         ncliente_rv(nuevos_datos$NCLIENTE)
         fact_rv(nuevos_datos$FACT)
         isolate({ walk(all_caches, ~ .$refresh()) })
-        indicators_cache(NULL)
-        last_update_time(Sys.time() - 3600)
-        data_ind()
+        # Sincroniza notes_data con el cache ya refrescado para que los módulos
+        # que leen vía notes_data() vean los datos actualizados sin nueva carga a BD
+        notes_data(notas_cache$get())
       },
       error   = function(e) warning("Error al actualizar datos base: ", e$message),
       finally = waiter_hide()
     )
   })
-
+  
   # UI Outputs ----
-
+  
   ## Encabezados ----
+  
   ### Usuario ----
   output$user <- renderUI({
-    FormatearTexto(paste(usuario()) %>% HTML, negrita = T, tamano_pct = 0.75, alineacion = "center", color = "#999")
+    FormatearTexto(
+      paste(usuario()) %>% HTML,
+      negrita = TRUE, tamano_pct = 0.75, alineacion = "center", color = "#999"
+    )
   })
   
-  ### Menu de Indicadores ----
+  ### Menú de Indicadores ----
   IndicadoresServer("ind_kpis", dat = data_ind)
-  res_ind <- MenuHeaderServer(id = "MenuIndicadores",
-                              items_r = IndicadoresUI("ind_kpis"),
-                              headerText = NULL,
-                              href = "#",
-                              footerText = "Comparación de indicadores")
+  res_ind <- MenuHeaderServer(
+    id         = "MenuIndicadores",
+    items_r    = IndicadoresUI("ind_kpis"),
+    headerText = NULL,
+    href       = "#",
+    footerText = "Comparación de indicadores"
+  )
   observeEvent(res_ind$footer_click(), {
     bs4Dash::updateTabItems(session, "menu_principal", selected = "HT_Indicadores")
   })
   
   ### Notificación de Tareas ----
-  data_not <- reactive({
+  # data_not_header: filtro amplio (Usuario O Responsable) para el ícono de campana
+  # Nombre explícito para evitar la sobreescritura silenciosa del original
+  data_not_header <- reactive({
     u <- usuario()
-    CargarDatos("CRMNALNOTAS") %>%
+    notes_data() %>%
       dplyr::filter(Usuario == u | grepl(u, Responsable, fixed = TRUE))
   })
   
-  not_mod <- NotificacionesDropServer("not_content", dat = data_not)
-  res_not <- MenuHeaderServer(id = "MenuNotificaciones",
-                              items_r = NotificacionesDropUI("not_content"),
-                              badgeStatus_r = not_mod$badge_st,
-                              badge_n_r = not_mod$n,
-                              headerText = "Tareas y Asignaciones",
-                              href = "#",
-                              footerText = "Ver todas")
-  
+  not_mod <- NotificacionesDropServer("not_content", dat = data_not_header)
+  res_not <- MenuHeaderServer(
+    id            = "MenuNotificaciones",
+    items_r       = NotificacionesDropUI("not_content"),
+    badgeStatus_r = not_mod$badge_st,
+    badge_n_r     = not_mod$n,
+    headerText    = "Tareas y Asignaciones",
+    href          = "#",
+    footerText    = "Ver todas"
+  )
   observeEvent(not_mod$item_click(), {
     bs4Dash::updateTabItems(session, "menu_principal", selected = "HT_Tareas")
   })
@@ -666,21 +721,22 @@ server <- function(input, output, session) {
   
   ### Clientes sin información ----
   
-  # Clientes con datos CRM incompletos
+  # Clientes activos sin registro en CRMNALCLIENTE
+  # clientes_raw_cache reemplaza CargarDatos("CRMNALCLIENTE") directo
+  # datos_rv()         reemplaza el objeto global `data`
   clientes_incompletos_r <- reactive({
-    crm <- CargarDatos("CRMNALCLIENTE") %>%
-      dplyr::mutate(FecProceso = as.Date(FecProceso)) %>%
+    crm <- clientes_raw_cache$get() %>%
       dplyr::group_by(CliNitPpal, LinNegCod) %>%
       dplyr::arrange(dplyr::desc(FecProceso)) %>%
       dplyr::slice(1) %>%
       dplyr::ungroup() %>%
       dplyr::select(CliNitPpal, LinNegCod, Segmento_crm = Segmento, Asesor_crm = Asesor)
     
-    t1 <- data %>%
+    datos_rv() %>%
       dplyr::distinct(CliNitPpal, LinNegCod, PerRazSoc, CLLinNegNo) %>%
       dplyr::anti_join(crm, by = c("CliNitPpal", "LinNegCod")) %>%
       dplyr::arrange(PerRazSoc) %>%
-      dplyr::mutate(label  = paste0(CLLinNegNo, " \u2014 ", PerRazSoc)) %>% 
+      dplyr::mutate(label = paste0(CLLinNegNo, " \u2014 ", PerRazSoc)) %>%
       dplyr::arrange(label)
   })
   
@@ -698,20 +754,20 @@ server <- function(input, output, session) {
     usr = usuario
   )
   
-  # Resumen de datos 
+  # Resumen de datos del modal de cliente
+  # clientes_raw_cache reemplaza CargarDatos("CRMNALCLIENTE") por cada apertura de modal
   output$resumen_cli_modal <- renderUI({
     id_val <- cli_identidad_rv()
     req(!is.null(id_val), length(id_val$nit) == 1L, !is.na(id_val$nit))
     
-    crm <- CargarDatos("CRMNALCLIENTE") %>%
+    crm <- clientes_raw_cache$get() %>%
       dplyr::filter(CliNitPpal == id_val$nit, LinNegCod == id_val$linneg_cod) %>%
-      dplyr::arrange(dplyr::desc(as.Date(FecProceso))) %>%
+      dplyr::arrange(dplyr::desc(FecProceso)) %>%
       dplyr::slice(1)
     
     dat_cli <- data_c() %>%
       dplyr::filter(CliNitPpal == id_val$nit, LinNegCod == id_val$linneg_cod)
     
-    # Último pedido: todas las filas del CLPdcCod más reciente ----
     cod_ultimo <- dat_cli %>%
       dplyr::arrange(dplyr::desc(PdcFecCre)) %>%
       dplyr::pull(CLPdcCod) %>%
@@ -719,25 +775,24 @@ server <- function(input, output, session) {
     
     ultimo <- dat_cli %>% dplyr::filter(CLPdcCod == cod_ultimo)
     
-    # Valores CRM ----
-    segmento  <- if (nrow(crm) > 0 && nzchar(crm$Segmento[1] %||% "")) crm$Segmento[1] else "\u2014"
-    asesor    <- if (nrow(crm) > 0 && nzchar(crm$Asesor[1]   %||% "")) crm$Asesor[1]   else "\u2014"
+    segmento <- if (nrow(crm) > 0 && nzchar(crm$Segmento[1] %||% "")) crm$Segmento[1] else "\u2014"
+    asesor   <- if (nrow(crm) > 0 && nzchar(crm$Asesor[1]   %||% "")) crm$Asesor[1]   else "\u2014"
     ultima_fac <- tryCatch({
       m <- max(dat_cli$FecFact, na.rm = TRUE)
       if (is.infinite(m)) "\u2014" else format(m, "%d %b %Y")
     }, error = function(e) "\u2014")
     
-    # Valores último pedido ----
     if (nrow(ultimo) > 0) {
       cod_pedido <- as.character(cod_ultimo %||% "\u2014")
-      fec_pedido <- tryCatch(format(as.Date(ultimo$PdcFecCre[1]), "%d %b %Y"), error = function(e) "\u2014")
+      fec_pedido <- tryCatch(
+        format(as.Date(ultimo$PdcFecCre[1]), "%d %b %Y"), error = function(e) "\u2014"
+      )
       usr_pedido <- ultimo$Usuario[1] %||% "\u2014"
       sacos_tot  <- format(sum(ultimo$SacLote, na.rm = TRUE), big.mark = ".", decimal.mark = ",")
     } else {
       cod_pedido <- fec_pedido <- usr_pedido <- sacos_tot <- "\u2014"
     }
     
-    # Helpers ----
     .seccion <- function(label) {
       tags$p(
         style = paste0(
@@ -757,7 +812,6 @@ server <- function(input, output, session) {
       )
     }
     
-    # Tarjetas de lote: una por fila de ultimo ----
     lotes_ui <- if (nrow(ultimo) > 0) {
       items <- lapply(seq_len(nrow(ultimo)), function(i) {
         f <- ultimo[i, ]
@@ -790,29 +844,25 @@ server <- function(input, output, session) {
       tags$span("\u2014", style = "font-size:11px; color:#94A3B8;")
     }
     
-    # Layout ----
     tags$div(
       style = paste0(
         "background:#F8FAFC; border:1px solid #E2E8F0; border-radius:6px;",
         "padding:12px 14px; margin-bottom:14px;"
       ),
       fluidRow(
-        # Columna 1 — Datos CRM
         column(4,
                .seccion("Datos CRM"),
                .item("calendar",    "Última factura:", ultima_fac),
                .item("layer-group", "Segmento:",       segmento),
                .item("user",        "Asesor:",          asesor)
         ),
-        # Columna 2 — Cabecera pedido
         column(4,
                .seccion("Último pedido"),
-               .item("hashtag",         "Código:",    cod_pedido),
-               .item("calendar-plus",   "Creación:",  fec_pedido),
-               .item("user-pen",        "Usuario:",    usr_pedido),
-               .item("weight-hanging",  "Sacos tot.:", sacos_tot)
+               .item("hashtag",        "Código:",     cod_pedido),
+               .item("calendar-plus",  "Creación:",   fec_pedido),
+               .item("user-pen",       "Usuario:",    usr_pedido),
+               .item("weight-hanging", "Sacos tot.:", sacos_tot)
         ),
-        # Columna 3 — Lotes del pedido
         column(4,
                .seccion(paste0("Lotes (", nrow(ultimo), ")")),
                lotes_ui
@@ -821,11 +871,10 @@ server <- function(input, output, session) {
     )
   })
   
-  # MenuHeader modo df — modal integrado
   MenuHeaderServer(
     id            = "MenuClientes",
     items_r       = clientes_incompletos_r,
-    key_cols      = c("CliNitPpal", "LinNegCod", "PerRazSoc", "CLLinNegNo"), 
+    key_cols      = c("CliNitPpal", "LinNegCod", "PerRazSoc", "CLLinNegNo"),
     badgeStatus_r = "danger",
     headerText    = NULL,
     href          = "#",
@@ -845,24 +894,26 @@ server <- function(input, output, session) {
     )
   )
   
-  ### Productos sin informacion ----
-
+  ### Productos sin información ----
+  # productos_cache reemplaza CargarDatos("CRMNALPRODS") directo
+  # nmarcom_cache / nmarcas_cache reemplazan dos ConsultaSistema sin cache
+  # datos_rv()         reemplaza el objeto global `data`
   productos_incompletos_r <- reactive({
-    prods <- CargarDatos("CRMNALPRODS") %>%
+    prods <- productos_cache$get() %>%
       dplyr::distinct(LinNegCod, LinProCod, MCCod, MrcCod)
     
-    nmarcom <- ConsultaSistema("syscafe", "SELECT MCCod, MCNom FROM NMARCOM")
-    nmarcas <- ConsultaSistema("syscafe", "SELECT MrcCod, MrcNom AS Marca FROM NMARCAS")
-    
-    data %>%
+    datos_rv() %>%
       dplyr::group_by(LinNegCod, LinProCod, MCCod, MrcCod, CLLinNegNo) %>%
-      dplyr::summarise(SacosYTD = sum(ifelse(year(FecFact) == year(Sys.Date()), SacosFact, 0))) %>% 
+      dplyr::summarise(
+        SacosYTD = sum(ifelse(year(FecFact) == year(Sys.Date()), SacosFact, 0)),
+        .groups  = "drop"
+      ) %>%
       dplyr::anti_join(prods, by = c("LinNegCod", "LinProCod", "MCCod", "MrcCod")) %>%
-      dplyr::left_join(nmarcom, by = "MCCod") %>%
-      dplyr::left_join(nmarcas, by = "MrcCod") %>%
+      dplyr::left_join(nmarcom_cache$get(), by = "MCCod") %>%
+      dplyr::left_join(nmarcas_cache$get(), by = "MrcCod") %>%
       dplyr::rename(LinNeg = CLLinNegNo) %>%
       dplyr::arrange(desc(SacosYTD)) %>%
-      dplyr::mutate(label  = paste0(LinNeg, " \u2014 ", MCNom, " / ", Marca)) %>% 
+      dplyr::mutate(label = paste0(LinNeg, " \u2014 ", MCNom, " / ", Marca)) %>%
       select(-SacosYTD)
   })
   
@@ -870,7 +921,7 @@ server <- function(input, output, session) {
   ProdFormulario(
     id        = "mod_form_prod",
     identidad = reactive(prod_identidad_rv()),
-    dat       = data_c, 
+    dat       = data_c,
     usr       = usuario
   )
   
@@ -886,37 +937,40 @@ server <- function(input, output, session) {
     modal_size    = "m",
     modal_pre_fn  = function(sel) {
       prod_identidad_rv(list(
-        linneg_cod  = as.numeric(sel$LinNegCod),
-        linpro_cod  = as.numeric(sel$LinProCod),
-        mc_cod      = as.numeric(sel$MCCod),
-        mrc_cod     = as.numeric(sel$MrcCod),
-        linneg      = sel$LinNeg,
-        mc_nom      = sel$MCNom,
-        marca       = sel$Marca,
-        linpro_nom  = NULL   
+        linneg_cod = as.numeric(sel$LinNegCod),
+        linpro_cod = as.numeric(sel$LinProCod),
+        mc_cod     = as.numeric(sel$MCCod),
+        mrc_cod    = as.numeric(sel$MrcCod),
+        linneg     = sel$LinNeg,
+        mc_nom     = sel$MCNom,
+        marca      = sel$Marca,
+        linpro_nom = NULL
       ))
     },
     modal_titulo_fn    = function(sel) paste0(sel$MCNom, " / ", sel$Marca),
     modal_contenido_fn = function(sel) ProdFormularioUI("mod_form_prod")
   )
   
+  # Módulos ----
   
-  # Modulos ----
-
   ## Encabezado ----
   Cotizacion("Cotizador", usuario, data_c)
-
-  data_not <- reactive({ CargarDatos("CRMNALNOTAS") %>% filter(Responsable == usuario()) })
-  Notificaciones("Notificaciones", data_not)
-
-  TaskCreation("Tareas", usuario, notes_data)
+  
+  # data_not_modulo: filtro estricto por Responsable para el módulo de notificaciones
+  # Nombre diferenciado respecto a data_not_header para evitar la colisión del original
+  data_not_modulo <- reactive({
+    notes_data() %>% filter(Responsable == usuario())
+  })
+  Notificaciones("Notificaciones", data_not_modulo)
+  
+  TaskCreation("Tareas",     usuario, notes_data)
   noteDisplay("NotasTareas", usuario, notes_data)
-
+  
   Competencia("Competencia", data_ind, usuario)
   GestionProducto("Productos", data_c, usuario)
-
+  
   ## Cuerpo ----
-
+  
   ### Hoja de trabajo ----
   ResumenTotal(
     id                = "ResumenTotal",
@@ -930,34 +984,34 @@ server <- function(input, output, session) {
     usr               = usuario,
     trigger_update    = trigger_update_opt
   )
-
+  
   ComparacionIndicadores("CompIndicadores", data_ind)
-  Calculadora("Calculadoras", data_ind, usuario)
-  Presupuesto("PresupuestoTotal", data_t, clientes_raw)
-  Pendientes("Pendientes", data_f, ped_sinlote, usuario)
-
+  Calculadora("Calculadoras",     data_ind, usuario)
+  Presupuesto("PresupuestoTotal", data_t,   clientes_raw)
+  Pendientes("Pendientes",        data_f,   ped_sinlote, usuario)
+  
   ### Oportunidades ----
-  FormularioOportunidad("Formulario",  dat = data_c, usr = usuario,
+  FormularioOportunidad("Formulario", dat = data_c, usr = usuario,
                         trigger_update = trigger_update_opt)
-  TablaOportunidades("Listado",       data_op = data_oportunidades_f, usr = usuario,
+  TablaOportunidades("Listado", data_op = data_oportunidades_f, usr = usuario,
                      trigger_update = trigger_update_opt)
   DashboardOportunidades("Oportunidades", data_oportunidades_f)
-
+  
   ### Clientes ----
   DetalleCliente(id = "ResumenClientes", data_f, usr = usuario,
                  trigger_update = trigger_update_opt)
-
+  
   ppto_clientes <- reactive({ data_t() %>% filter(SegmentoRacafe == "CLIENTE") })
   Presupuesto("Presupuesto", ppto_clientes, clientes_raw)
-
+  
   RFM("RFMClientesSacos",  data_rfm_cliente_f_s)
   RFM("RFMClientesMargen", data_rfm_cliente_f_m, "$ MNFCC")
   ClientesNuevosRecuperados("ClientesNuevosRecuperados", datos_rv, data_f)
-
+  
   ### Clientes a Recuperar ----
   DetalleClienteRecuperar(id = "ResumenClientesRecuperar", data_f, usr = usuario,
                           trigger_update = trigger_update_opt)
-
+  
   output$ClientesRecuperarConPPto <- renderDT({
     aux1 <- data_f() %>%
       filter(SegmentoRacafe == "CLIENTE A RECUPERAR", PptoMargen != 0) %>%
@@ -965,19 +1019,19 @@ server <- function(input, output, session) {
       summarise(
         UltDespacho = max(FecFact, na.rm = TRUE),
         Presupuesto = max(PptoMargen / 12),
-        SacosMes   = sum(
+        SacosMes    = sum(
           if_else(PrimerDia(FecFact) == PrimerDia(Sys.Date()), Kilos / 70, 0), na.rm = TRUE
         ),
-        SacosAnho  = sum(
+        SacosAnho   = sum(
           if_else(year(FecFact) == year(Sys.Date()), Kilos / 70, 0), na.rm = TRUE
         ),
-        MargenMes  = sum(
+        MargenMes   = sum(
           if_else(PrimerDia(FecFact) == PrimerDia(Sys.Date()), Margen / 70, 0), na.rm = TRUE
         ),
-        MargenAnho = sum(
+        MargenAnho  = sum(
           if_else(year(FecFact) == year(Sys.Date()), Margen, 0), na.rm = TRUE
         ),
-        .groups    = "drop"
+        .groups     = "drop"
       ) %>%
       janitor::adorn_totals("row", name = "TOTAL")
     ImprimirDTRAzSocLinNeg(
@@ -991,7 +1045,7 @@ server <- function(input, output, session) {
       dom = "Bft", buscar = TRUE, alto = 500
     )
   })
-
+  
   data_sankey_clirec <- reactive({
     data_f() %>%
       mutate(
@@ -1010,38 +1064,40 @@ server <- function(input, output, session) {
       )
   })
   SankeyTabla("ClienteRecuperar", data_sankey_clirec)
-
+  
   RFM("RFMCliRecSacos",  data_rfm_clirec_f_s)
   RFM("RFMCliRecMargen", data_rfm_clirec_f_m, "$ MNFCC")
-
+  
   output$ClientesRecuperar <- renderDT({
-    aux1 <- CargarDatos("CRMNALSEGR") %>%
+    # segmentos_raw_cache reemplaza CargarDatos("CRMNALSEGR") directo
+    # Se requiere histórico de dos snapshots; segmentos_cache solo expone el último
+    aux1 <- segmentos_raw_cache$get() %>%
       select(LinNegCod, CliNitPpal, SegmentoRacafe, FecProceso) %>%
-      mutate(FecProceso = as.Date(FecProceso)) %>%
       filter(FecProceso >= PrimerDia(Sys.Date()) - months(1)) %>%
       group_by(LinNegCod, CliNitPpal) %>%
       pivot_wider(names_from = FecProceso, values_from = SegmentoRacafe) %>%
       setNames(c("LinNegCod", "CliNitPpal", "Antes", "Ahora")) %>%
       filter(Antes %in% c("CLIENTE", NA) & Ahora == "CLIENTE A RECUPERAR") %>%
       select(LinNegCod, CliNitPpal)
+    
     aux2 <- data_f() %>%
       inner_join(aux1, by = join_by(LinNegCod, CliNitPpal)) %>%
       group_by(PerRazSoc, LineaNegocio = CLLinNegNo, Segmento) %>%
       summarise(
         UltDespacho = max(FecFact, na.rm = TRUE),
-        SacosMes   = sum(
+        SacosMes    = sum(
           if_else(PrimerDia(FecDesp) == PrimerDia(Sys.Date()), Kilos / 70, 0), na.rm = TRUE
         ),
-        SacosAnho  = sum(
+        SacosAnho   = sum(
           if_else(year(FecDesp) == year(Sys.Date()), Kilos / 70, 0), na.rm = TRUE
         ),
-        MargenMes  = sum(
+        MargenMes   = sum(
           if_else(PrimerDia(FecDesp) == PrimerDia(Sys.Date()), Margen / 70, 0), na.rm = TRUE
         ),
-        MargenAnho = sum(
+        MargenAnho  = sum(
           if_else(year(FecDesp) == year(Sys.Date()), Margen, 0), na.rm = TRUE
         ),
-        .groups    = "drop"
+        .groups     = "drop"
       ) %>%
       janitor::adorn_totals("row", name = "TOTAL")
     ImprimirDTRAzSocLinNeg(
@@ -1055,7 +1111,7 @@ server <- function(input, output, session) {
       dom = "Bft", buscar = TRUE, alto = 500
     )
   })
-
+  
   ### Leads ----
   dt_ResumenLeads <- reactive({
     aux1 <- data_leads_f() %>%
@@ -1076,7 +1132,7 @@ server <- function(input, output, session) {
   })
   dd_ResumenLeads <- reactive({ datos_rv() })
   TablaModalCelda("ResumenLeads", dt_ResumenLeads, dd_ResumenLeads, usuario, rv)
-
+  
   data_sankey_lead <- reactive({
     data_leads_f() %>%
       mutate(
@@ -1098,25 +1154,24 @@ server <- function(input, output, session) {
       )
   })
   SankeyTabla("Leads", data_sankey_lead)
-
+  
   ### Consulta Individual ----
   Individual(
     "ConsultaIndivual",
     dat          = data_individual,
     usr          = usuario,
-    clientes_raw = clientes_raw ,
+    clientes_raw = clientes_raw,
     dat_global   = data_c
   )
   
   # Footer ----
   output$last_update_info <- renderText({
-    updates <- map_dbl(all_caches, ~ as.numeric(.$last_update())) %>%
-      c(as.numeric(last_update_time()))
-    oldest_update <- as.POSIXct(min(updates, na.rm = TRUE), origin = "1970-01-01")
+    updates    <- map_dbl(all_caches, ~ as.numeric(.$last_update()))
+    oldest_upd <- as.POSIXct(min(updates, na.rm = TRUE), origin = "1970-01-01")
     HTML(FormatearTexto(
-      paste("\u00daltima actualizaci\u00f3n:", format(oldest_update, "%Y-%m-%d %H:%M:%S")),
+      paste("\u00daltima actualizaci\u00f3n:", format(oldest_upd, "%Y-%m-%d %H:%M:%S")),
       tamano_pct = 0.6
     ))
   })
-
+  
 }

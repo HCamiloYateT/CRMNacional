@@ -69,7 +69,11 @@ CargarExcelPorId <- function(id_archivo, hoja, usuario) {
                     CLMCCod AS MCCod, CLMCNom, CLMrcCod AS MrcCod, CLMrcNom
              FROM   EXPCUALO
              WHERE  CiaCod = 10
-               AND  CLPdcVtaNa = 1
+               AND  (CLLinNegCo = 21000 OR
+                        (CLLinNegCo = 10000
+                           AND CLLinProCo IN (90030, 90040, 40050, 40100, 90025, 40150, 40200, 40010, 90035, 40250)
+                        )
+                    )
                AND  CLCliNit <> 32
                AND  CLLinNegCo IN (10000, 21000)
                AND  CLLotCan > 0"
@@ -94,7 +98,11 @@ CargarExcelPorId <- function(id_archivo, hoja, usuario) {
               CLMCCod AS MCCod, CLMCNom, CLMrcCod AS MrcCod, CLMrcNom
        FROM   EXPCUALO
        WHERE  CiaCod = 10
-         AND  CLPdcVtaNa = 1
+         AND  (CLLinNegCo = 21000 OR
+                        (CLLinNegCo = 10000
+                           AND CLLinProCo IN (90030, 90040, 40050, 40100, 90025, 40150, 40200, 40010, 90035, 40250)
+                        )
+              )
          AND  CLCliNit <> 32
          AND  CLLinNegCo IN (10000, 21000)
          AND  CLLotCan > 0
@@ -122,7 +130,6 @@ cargar_lotes_incremental <- function(datos_previos = NULL) {
   
   bind_rows(lotes_congelados, lotes_activos)
 }
-
 
 # Funciones: facturacion (FCTFACN1) -------------------------------------------
 
@@ -175,7 +182,6 @@ cargar_fact <- function() {
     ) %>%
     mutate(FECFACTURA = as.Date(FECFACTURA, origin = "1900-01-01"))
 }
-
 # Selecciona la hoja BASE mas reciente de un vector de nombres de hojas
 .seleccionar_hoja_base <- function(hojas) {
   bases <- hojas[grepl("^BASE( \\d{4})?$", hojas, ignore.case = TRUE)]
@@ -206,10 +212,12 @@ cargar_margenes_onedrive <- function(usuario, id_carpeta_raiz) {
     select(name, id)
   if (nrow(mes) == 0L) { message("No se encontro carpeta de mes"); return(NULL) }
   
+  mes <- list(id = "014N3L2U4XJXKNNKMIABGYSFTPLCXSWZG2") # Marzo
+  
   # Archivos PYG disponibles en el mes mas reciente
   pyg_files <- ListarContenidoCarpetaId(usuario, mes$id) %>%
     filter(grepl(
-      "^\\d{2}\\. PYG POR LOTE A\u00d1O \\d{4}.*(COPRODUCTOS|A LA MEDIDA)\\.xlsx$",
+      "^\\d{2}\\. PYG POR LOTE( A\u00d1O)? \\d{4}.*(COPRODUCTOS|A LA MEDIDA).*\\.xlsx$",
       name, ignore.case = TRUE
     )) %>%
     select(name, id)
@@ -218,8 +226,17 @@ cargar_margenes_onedrive <- function(usuario, id_carpeta_raiz) {
     return(NULL)
   }
   
+  pyg_files <- pyg_files[c(1,3),]
+  
+  if (nrow(pyg_files) != 2L) {
+    stop(sprintf(
+      "Se esperaban 2 archivos PYG en '%s' y se encontraron %d",
+      mes$name, nrow(pyg_files)
+    ))
+  }
+  
   # Procesar cada archivo y combinar resultados
-  purrr::map(seq_len(nrow(pyg_files)), function(i) {
+  res <- purrr::map(seq_len(nrow(pyg_files)), function(i) {
     arch     <- pyg_files[i, ]
     hojas    <- tryCatch(
       leer_hojas_onedrive(arch$id, usuario),
@@ -236,8 +253,9 @@ cargar_margenes_onedrive <- function(usuario, id_carpeta_raiz) {
   }) %>%
     purrr::compact() %>%
     bind_rows()
+  
+  return(res)
 }
-
 
 # Procesamiento: 1. Margenes ---------------------------------------------------
 print("Cargando datos de margenes...")
@@ -271,25 +289,7 @@ if (!is.null(margenes_nuevos) && nrow(margenes_nuevos) > 0L) {
 }
 
 
-# Procesamiento: 2. Productos --------------------------------------------------
-print("Cargando datos de productos...")
-
-productos <- CargarExcelDesdeOneDrive("hcyate",
-                                      "2024/Industria Nacional/CRM/Tablas de Homologaci\u00f3n",
-                                      "Productos.xlsx") %>%
-  openxlsx2::read_xlsx() %>%
-  mutate(Usr = "HCYATE", across(where(is.character), \(x) replace_na(x, "SIN DATO"))) %>%
-  pivot_longer(cols          = matches("^Categoria|^Producto"),
-               names_to      = c(".value", "Anho"),
-               names_pattern = "(Categoria|Producto)(20\\d{2})") %>%
-  mutate(FecProceso = as.Date(paste0(Anho, "-01-01"))) %>%
-  select(FecProceso, Usr, LinNegCod, LinNeg, LinProCod, LinProNom,
-         MCCod, MCNom, MrcCod, Marca, Excluir, Categoria, Producto) %>%
-  mutate(across(where(is.character), racafe::LimpiarNombres))
-
-EscribirDatos(productos, "CRMNALPRODS")
-
-# Procesamiento: 3. Datos principales ------------------------------------------
+# Procesamiento: 2. Datos principales ------------------------------------------
 print("Cargando datos principales...")
 
 # Tabla maestra de sucursales — con tildes para que LimpiarNombres produzca
@@ -409,7 +409,7 @@ data <- lotes_raw %>%
   mutate(across(where(is.character), ~ replace_na(., "SIN DATO")))
 
 
-# Procesamiento: 4. Segmentaciones (solo primer dia del mes) -------------------
+# Procesamiento: 3. Segmentaciones (solo primer dia del mes) -------------------
 
 identificar_clientes_faltantes <- function(df_referencia, df_comparacion) {
   df_referencia %>%

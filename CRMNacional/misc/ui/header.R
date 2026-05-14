@@ -13,7 +13,7 @@ header <- bs4DashNavbar(status = "white", border = FALSE, sidebarIcon = icon("ba
                                   )
                           ),
                         rightUi = tagList(MenuHeaderUI("MenuIndicadores", icon = shiny::icon("arrow-trend-up"), min_width = "360px"),
-                                          MenuHeaderUI("MenuNotificaciones", icon = shiny::icon("bell"), min_width = "360px"),
+                                          MenuHeaderUI("MenuTareas", icon = shiny::icon("bars-progress"), min_width = "360px"),
                                           MenuHeaderUI("MenuClientes", icon = shiny::icon("users"), min_width = "360px"),
                                           MenuHeaderUI("MenuProductos", icon = shiny::icon("delicious"), min_width = "360px")
                                           )
