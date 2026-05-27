@@ -1,548 +1,493 @@
-# ==============================================================================
-# MODULO: CohortesUnificado
-# Refactorizado con Racafe + racafeModulos
-# Cambios principales:
-#   - CajaModal / CajaModalUI reemplazan renderbs4ValueBox + observeEvent manual
-#   - html_valor / html_texto reemplazan .caja_kpi con formato manual
-#   - BotonDescarga reemplaza downloadButton con clases manuales
-#   - .caja_con_boton y .caja_kpi eliminados
-#   - .show_modal conservado solo para modales desde tabla resumen y rangos
-#     (son dinamicos: el contenido varia segun el click, no se puede declarar
-#     estaticamente como contenido_modal; CajaModal no aplica ahi)
-# ==============================================================================
+# Helpers ----
 
-library(shiny)
-library(bs4Dash)
-library(dplyr)
-library(tidyr)
-library(lubridate)
-library(plotly)
-library(gt)
-library(reactable)
-library(writexl)
-library(scales)
-library(stringr)
-library(racafeModulos)
-
-# ------------------------------------------------------------------------------
-# Helpers estaticos
-# ------------------------------------------------------------------------------
-
-# .to_ym eliminado — reemplazado por PrimerDia() del paquete Racafe
-# %||%   eliminado — se usa el exportado por el paquete Racafe
-
-.ESTADOS <- c(
-  "CLIENTE ACTIVO"      = "#2C7BB6",
-  "CLIENTE A RECUPERAR" = "#F4A820",
-  "NUEVO DEL PERIODO"   = "#27AE60"
-)
-
-n_distinct_uc <- function(df) dplyr::n_distinct(df$cliente_id)
-# ------------------------------------------------------------------------------
-# Paleta semafórica — devuelve hex segun tipo de indicador y valor
-# Conservada: la usan html_valor (color), .color_cumpl_bg y .color_tasa_bg
-# ------------------------------------------------------------------------------
-
-.color_kpi <- function(v, tipo = c("retencion", "perdida", "reactivacion", "tasa")) {
-  tipo <- match.arg(tipo)
-  if (is.null(v) || is.na(v)) return("#AAAAAA")
-  switch(tipo,
-         retencion    = if (v >= 80) "#27AE60" else if (v >= 60) "#F4A820" else "#E74C3C",
-         perdida      = if (v <= 10) "#27AE60" else if (v <= 25) "#F4A820" else "#E74C3C",
-         reactivacion = if (v >= 30) "#27AE60" else if (v >= 15) "#F4A820" else "#E74C3C",
-         tasa         = if (v >= 75) "#27AE60" else if (v >= 50) "#F4A820" else "#E74C3C"
-  )
-}
-
-# ------------------------------------------------------------------------------
-# Helpers de formato — para reactable y gt
-# ------------------------------------------------------------------------------
-
-.fmt_pct <- function(x) ifelse(is.na(x), "\u2014", paste0(round(x, 1), "%"))
-.fmt_num <- function(x) format(round(x, 0), big.mark = ",", scientific = FALSE)
-
-.color_cumpl_bg <- function(pct) {
-  dplyr::case_when(
-    is.na(pct) ~ "#F8F9FA",
-    pct >= 90  ~ "#D5F5E3",
-    pct >= 70  ~ "#FCF3CF",
-    TRUE       ~ "#FADBD8"
-  )
-}
-
-.color_tasa_bg <- function(pct) {
-  dplyr::case_when(
-    is.na(pct) ~ "#F8F9FA",
-    pct >= 75  ~ "#D5F5E3",
-    pct >= 50  ~ "#FCF3CF",
-    TRUE       ~ "#FADBD8"
-  )
-}
-
-.kpi_nota <- function(texto) {
-  p(texto,
-    style = "font-size:10px; color:#999; margin-top:-6px; margin-bottom:6px; font-style:italic;")
-}
-
-# ------------------------------------------------------------------------------
-# Reactable de unidades comerciales
-# ------------------------------------------------------------------------------
-
-.reactable_uc <- function(data, input_id) {
-  
-  tiene_ppto <- all(c("ppto_sacos", "ppto_margen",
-                      "cumpl_sacos_pct", "cumpl_margen_pct") %in% names(data))
-  
-  js_click <- paste0(
-    "function(rowInfo) {",
-    "  Shiny.setInputValue('", input_id, "', {",
-    "    cliente_id: rowInfo.values['cliente_id'],",
-    "    nonce: Math.random()",
-    "  }, {priority: 'event'});",
-    "}"
-  )
-  
-  cols_base <- list(
-    cliente_id    = reactable::colDef(show = FALSE),
-    PerRazSoc     = reactable::colDef(name = "Razon Social",      minWidth = 180),
-    Asesor        = reactable::colDef(name = "Asesor",             minWidth = 130),
-    Segmento      = reactable::colDef(name = "Segmento",           minWidth = 110),
-    CliNitPpal    = reactable::colDef(name = "NIT Principal",      minWidth = 110),
-    LinNegCod     = reactable::colDef(name = "Linea de Negocio",   minWidth = 100),
-    presupuestada = reactable::colDef(name = "Presupuestada",      minWidth = 110),
-    tipo_cohorte  = reactable::colDef(name = "Cohorte",            minWidth = 110),
-    estado        = reactable::colDef(
-      name     = "Estado",
-      minWidth = 140,
-      style    = function(value) {
-        bg <- switch(value,
-                     "CLIENTE ACTIVO"      = "#EFF6FF",
-                     "CLIENTE A RECUPERAR" = "#FFF8EC",
-                     "NUEVO DEL PERIODO"   = "#EDFBF2",
-                     "white"
-        )
-        list(background = bg, fontWeight = "500")
-      }
-    ),
-    fecha_ref     = reactable::colDef(
-      name     = "Fecha ref.",
-      minWidth = 105,
-      cell     = function(v) if (is.na(v)) "\u2014" else format(as.Date(v), "%b %Y")
-    ),
-    sacos_total   = reactable::colDef(
-      name = "Sacos reales", minWidth = 100,
-      cell = function(v) .fmt_num(v)
-    ),
-    margen_total  = reactable::colDef(
-      name = "Margen real", minWidth = 110,
-      cell = function(v) .fmt_num(v)
-    ),
-    tasa_fact_pct = reactable::colDef(
-      name  = "Tasa facturacion", minWidth = 110,
-      cell  = function(v) .fmt_pct(v),
-      style = function(v) list(background = .color_tasa_bg(v))
-    )
-  )
-  
-  cols_ppto <- if (tiene_ppto) list(
-    ppto_sacos       = reactable::colDef(
-      name = "Ppto sacos",  minWidth = 100,
-      cell = function(v) .fmt_num(v)
-    ),
-    ppto_margen      = reactable::colDef(
-      name = "Ppto margen", minWidth = 110,
-      cell = function(v) .fmt_num(v)
-    ),
-    cumpl_sacos_pct  = reactable::colDef(
-      name  = "% Sacos",  minWidth = 80,
-      cell  = function(v) .fmt_pct(v),
-      style = function(v) list(background = .color_cumpl_bg(v))
-    ),
-    cumpl_margen_pct = reactable::colDef(
-      name  = "% Margen", minWidth = 80,
-      cell  = function(v) .fmt_pct(v),
-      style = function(v) list(background = .color_cumpl_bg(v))
-    )
-  ) else list()
-  
-  reactable::reactable(
-    data            = data,
-    columns         = c(cols_base, cols_ppto),
-    onClick         = JS(js_click),
-    highlight       = TRUE,
-    striped         = FALSE,
-    bordered        = TRUE,
-    compact         = TRUE,
-    searchable      = TRUE,
-    defaultPageSize = 15,
-    theme           = reactable::reactableTheme(
-      headerStyle = list(fontWeight = "600", fontSize = "12px"),
-      cellStyle   = list(fontSize = "12px", cursor = "pointer")
+# Comentario de nota explicativa bajo KPI dinamico
+.te_nota <- function(texto) {
+  tags$p(
+    texto,
+    style = paste0(
+      "font-size:10px; color:#999; text-align:center; ",
+      "margin-top:2px; margin-bottom:0; font-style:italic;"
     )
   )
 }
-
-# ------------------------------------------------------------------------------
-# GT cumplimiento mensual por unidad comercial
-# ------------------------------------------------------------------------------
-
-.gt_cumpl_uc <- function(panel_c, cliente, razon_social, meses_disp) {
-  data <- panel_c %>%
-    filter(cliente_id == cliente, ym %in% meses_disp) %>%
-    arrange(ym) %>%
-    transmute(
-      Mes           = format(ym, "%B %Y"),
-      `Ppto Sacos`  = round(ppto_sacos_mes,  0),
-      `Real Sacos`  = round(real_sacos,       0),
-      `% Sacos`     = cumpl_sacos_pct,
-      `Ppto Margen` = round(ppto_margen_mes,  0),
-      `Real Margen` = round(real_margen,      0),
-      `% Margen`    = cumpl_margen_pct
-    )
-  
-  total <- data %>%
-    summarise(
-      Mes           = "Total periodo",
-      `Ppto Sacos`  = sum(`Ppto Sacos`,  na.rm = TRUE),
-      `Real Sacos`  = sum(`Real Sacos`,  na.rm = TRUE),
-      `% Sacos`     = round(
-        sum(`Real Sacos`,  na.rm = TRUE) /
-          pmax(sum(`Ppto Sacos`,  na.rm = TRUE), 1) * 100, 1
-      ),
-      `Ppto Margen` = sum(`Ppto Margen`, na.rm = TRUE),
-      `Real Margen` = sum(`Real Margen`, na.rm = TRUE),
-      `% Margen`    = round(
-        sum(`Real Margen`, na.rm = TRUE) /
-          pmax(sum(`Ppto Margen`, na.rm = TRUE), 1) * 100, 1
+# Comentario de separador de seccion con icono
+.te_seccion <- function(titulo, icono) {
+  tags$div(
+    style = paste0(
+      "display:flex; align-items:center; gap:8px; ",
+      "margin:18px 0 6px 0; padding-bottom:6px; ",
+      "border-bottom:2px solid #E2E8F0;"
+    ),
+    tags$span(
+      style = "color:#64748B; font-size:13px;",
+      icon(icono)
+    ),
+    tags$span(
+      titulo,
+      style = paste0(
+        "font-size:13px; font-weight:700; color:#374151; ",
+        "letter-spacing:0.03em; text-transform:uppercase;"
       )
     )
-  
-  bind_rows(data, total) %>%
-    gt(rowname_col = "Mes") %>%
-    tab_header(
-      title    = razon_social,
-      subtitle = paste0("Unidad Comercial: ", cliente)
-    ) %>%
-    tab_spanner(label = "Sacos",  columns = c(`Ppto Sacos`,  `Real Sacos`,  `% Sacos`)) %>%
-    tab_spanner(label = "Margen", columns = c(`Ppto Margen`, `Real Margen`, `% Margen`)) %>%
-    fmt_number(
-      columns  = c(`Ppto Sacos`, `Real Sacos`, `Ppto Margen`, `Real Margen`),
-      decimals = 0, sep_mark = ",", dec_mark = "."
-    ) %>%
-    fmt_number(columns = c(`% Sacos`, `% Margen`), decimals = 1, dec_mark = ".") %>%
-    data_color(
-      columns = `% Sacos`,
-      fn      = scales::col_bin(
-        palette = c("#FADBD8", "#FCF3CF", "#D5F5E3"),
-        bins = c(-Inf, 70, 90, Inf), na.color = "#F8F9FA"
-      )
-    ) %>%
-    data_color(
-      columns = `% Margen`,
-      fn      = scales::col_bin(
-        palette = c("#FADBD8", "#FCF3CF", "#D5F5E3"),
-        bins = c(-Inf, 70, 90, Inf), na.color = "#F8F9FA"
-      )
-    ) %>%
-    tab_style(
-      style     = cell_text(weight = "bold"),
-      locations = cells_body(rows = Mes == "Total periodo")
-    ) %>%
-    tab_style(cell_text(weight = "bold"), cells_stub()) %>%
-    tab_options(
-      table.font.size              = px(12),
-      column_labels.font.weight    = "bold",
-      heading.title.font.size      = px(13),
-      heading.title.font.weight    = "bold",
-      table.width                  = pct(100)
+  )
+}
+# Comentario de subtitulo con color dinamico
+.te_subtitulo <- function(output_id, color) {
+  h6(
+    uiOutput(output_id),
+    style = sprintf(
+      "font-weight:600; color:%s; margin-bottom:4px; margin-top:8px;",
+      color
     )
+  )
 }
 
-# ==============================================================================
-# UI
-# ==============================================================================
 
+# Modulo principal ----
 CohortesUI <- function(id) {
+  
   ns <- NS(id)
   
   tagList(
     
-    # ── KPIs — Poblacion Base ─────────────────────────────────────────────────
-    # Usa CajaModalUI de racafeModulos en lugar de bs4ValueBoxOutput
+    # Comentario de bloque de alertas clickeables
     bs4Dash::bs4Card(
-      title        = tagList(icon("users"), " Poblacion Base"),
-      width        = 12, solidHeader = TRUE, status = "white", collapsible = TRUE,
+      title = tagList(
+        icon("exchange-alt"),
+        " Alertas del Mes Vigente"
+      ),
+      width = 12,
+      solidHeader = TRUE,
+      status = "white",
+      collapsible = TRUE,
+      
       fluidRow(
-        column(3, CajaModalUI(ns("kpi_baseline"))),
-        column(3, CajaModalUI(ns("kpi_presup"))),
-        column(3, CajaModalUI(ns("kpi_no_presup"))),
-        column(3, CajaModalUI(ns("kpi_nuevos")))
+        column(3,
+               CajaModalUI(ns("kpi_a_inactivo"))
+        ),
+        column(3,
+               CajaModalUI(ns("kpi_a_activo"))
+        ),
+        column(3,
+               CajaModalUI(ns("kpi_nuevo"))
+        ),
+        column(3,
+               CajaModalUI(ns("kpi_reactivado"))
+        )
       )
     ),
     
-    # ── KPIs — Indicadores Dinamicos Globales ─────────────────────────────────
-    # KPIs semafóricos sin boton: CajaModalUI con mostrar_boton = FALSE
+    # Comentario de bloque de indicadores dinamicos YTD
     bs4Dash::bs4Card(
-      title        = tagList(icon("chart-line"),
-                             " Indicadores Dinamicos de Cohorte — ultimo mes"),
-      width        = 12, solidHeader = TRUE, status = "white", collapsible = TRUE,
-      fluidRow(
-        column(3, CajaModalUI(ns("kpi_retencion"))),
-        column(3, CajaModalUI(ns("kpi_perdida"))),
-        column(3, CajaModalUI(ns("kpi_reactivacion"))),
-        column(3, CajaModalUI(ns("kpi_tasa_fact")))
+      title = tagList(
+        icon("chart-line"),
+        " Indicadores Dinámicos — YTD"
       ),
+      width = 12,
+      solidHeader = TRUE,
+      status = "white",
+      collapsible = TRUE,
+      
       fluidRow(
-        column(3, .kpi_nota("Activos t que permanecen Activos en t+1 / Total Activos en t")),
-        column(3, .kpi_nota("Activos t que pasan a A Recuperar en t+1 / Total Activos en t")),
-        column(3, .kpi_nota("A Recuperar en t que pasan a Activos en t+1 / Total A Recuperar en t")),
-        column(3, .kpi_nota("Promedio de (meses con facturacion / meses en cohorte) por UC"))
+        column(3,
+               CajaModalUI(ns("kpi_retencion"))
+        ),
+        column(3,
+               CajaModalUI(ns("kpi_perdida"))
+        ),
+        column(3,
+               CajaModalUI(ns("kpi_reactivacion"))
+        ),
+        column(3,
+               CajaModalUI(ns("kpi_tasa_fact"))
+        )
+      ),
+      
+      fluidRow(
+        column(
+          3,
+          .te_nota("Activos t → Activos t+1 / Total Activos en t")
+        ),
+        column(
+          3,
+          .te_nota("Activos t → A Recuperar t+1 / Total Activos en t")
+        ),
+        column(
+          3,
+          .te_nota(
+            "A Recuperar t → Activos t+1 / Total A Recuperar en t"
+          )
+        ),
+        column(
+          3,
+          .te_nota(
+            "Promedio meses con facturación / meses en panel YTD"
+          )
+        )
       )
     ),
     
-    # ── PRESUPUESTADOS ────────────────────────────────────────────────────────
+    # Comentario de bloque de analisis por poblacion
     bs4Dash::bs4Card(
-      title        = tagList(icon("bullseye"), " Unidades Comerciales Presupuestadas"),
-      width        = 12, solidHeader = TRUE, status = "white", collapsible = TRUE,
+      title = tagList(
+        icon("users"),
+        " Análisis por Población"
+      ),
+      width = 12,
+      solidHeader = TRUE,
+      status = "white",
+      collapsible = TRUE,
       
-      h6(uiOutput(ns("lbl_inicio_p")),
-         style = "font-weight:600; color:#2C7BB6; margin-bottom:4px;"),
+      # Comentario de control de poblacion
       fluidRow(
-        column(4, CajaModalUI(ns("kpi_p_activo_ini"))),
-        column(4, CajaModalUI(ns("kpi_p_recuperar_ini"))),
-        column(4, CajaModalUI(ns("kpi_p_tasa_fact_ini")))
-      ),
-      h6(uiOutput(ns("lbl_fin_p")),
-         style = "font-weight:600; color:#F4A820; margin-bottom:4px; margin-top:8px;"),
-      fluidRow(
-        column(4, CajaModalUI(ns("kpi_p_activo_fin"))),
-        column(4, CajaModalUI(ns("kpi_p_recuperar_fin"))),
-        column(4, CajaModalUI(ns("kpi_p_tasa_fact_fin")))
+        column(12,
+               tags$div(
+                 style = paste0(
+                   "display:flex; gap:24px; align-items:center; ",
+                   "padding:8px 12px; background:#F8FAFC; ",
+                   "border-radius:6px; margin-bottom:12px;"
+                 ),
+                 
+                 tags$span(
+                   style = "font-size:12px; font-weight:700; color:#374151;",
+                   icon("filter"),
+                   " Población:"
+                 ),
+                 
+                 shinyWidgets::prettyCheckbox(
+                   inputId = ns("pob_total"),
+                   label = "Total",
+                   value = TRUE,
+                   icon = icon("check"),
+                   status = "primary",
+                   shape = "round"
+                 ),
+                 
+                 shinyWidgets::prettyCheckbox(
+                   inputId = ns("pob_presup"),
+                   label = "Presupuestados",
+                   value = FALSE,
+                   icon = icon("check"),
+                   status = "info",
+                   shape = "round"
+                 ),
+                 
+                 shinyWidgets::prettyCheckbox(
+                   inputId = ns("pob_sin_presup"),
+                   label = "Sin Presupuesto",
+                   value = FALSE,
+                   icon = icon("check"),
+                   status = "warning",
+                   shape = "round"
+                 )
+               )
+        )
       ),
       
-      h6("Distribucion por Tasa de Facturacion — Presupuestados",
-         style = "font-weight:600; color:#555; margin-top:10px; margin-bottom:4px;"),
-      reactable::reactableOutput(ns("tabla_p_rangos_fact")),
-      p(icon("hand-pointer"),
-        " Haga clic en una fila para ver el detalle de las Unidades Comerciales",
-        style = "font-size:11px; color:#888; margin-top:4px; margin-bottom:8px;"),
-      
-      h6("Indicadores Dinamicos — Presupuestados",
-         style = "font-weight:600; color:#555; margin-top:6px;"),
-      fluidRow(
-        column(4, CajaModalUI(ns("kpi_p_retencion"))),
-        column(4, CajaModalUI(ns("kpi_p_perdida"))),
-        column(4, CajaModalUI(ns("kpi_p_reactivacion")))
-      ),
-      fluidRow(
-        column(4, .kpi_nota("Activos t → Activos t+1 / Total Activos en t")),
-        column(4, .kpi_nota("Activos t → A Recuperar t+1 / Total Activos en t")),
-        column(4, .kpi_nota("A Recuperar t → Activos t+1 / Total A Recuperar en t"))
+      # Comentario de sub bloque estado enero
+      .te_seccion(
+        "Estado Enero — Inicio de Año",
+        "calendar-alt"
       ),
       
-      fluidRow(
-        column(7, plotly::plotlyOutput(ns("graf_p_evolucion"),   height = "300px")),
-        column(5, plotly::plotlyOutput(ns("graf_p_permanencia"), height = "300px"))
+      h6(
+        "Inicio de Año — Enero",
+        style = paste0(
+          "font-weight:600; color:#2C7BB6; ",
+          "margin-bottom:4px;"
+        )
       ),
+      
+      uiOutput(ns("cajas_enero")),
+      
+      # Comentario de sub bloque estado mes vigente
+      .te_seccion(
+        "Estado Actual — Mes Vigente",
+        "calendar-check"
+      ),
+      
+      h6(
+        uiOutput(ns("lbl_mes_vigente")),
+        style = paste0(
+          "font-weight:600; color:#F4A820; ",
+          "margin-bottom:4px;"
+        )
+      ),
+      
+      uiOutput(ns("cajas_vigente")),
+      
+      # Comentario de sub bloque indicadores dinamicos
+      .te_seccion(
+        "Indicadores Dinámicos Enero → Mes Vigente",
+        "arrows-alt-h"
+      ),
+      
+      uiOutput(ns("cajas_dinamicos")),
+      
       hr(),
-      h5("Resumen mensual — Estado de la Poblacion Presupuestada",
-         style = "font-weight:600; margin-bottom:4px;"),
-      p(icon("hand-pointer"),
-        " Haga clic en una celda para ver el detalle de las Unidades Comerciales",
-        style = "font-size:11px; color:#888; margin-bottom:8px;"),
-      reactable::reactableOutput(ns("tabla_p_resumen")),
+      
+      # Comentario de tabla resumen mensual
+      .te_seccion(
+        "Resumen Mensual por Estado",
+        "table"
+      ),
+      
+      p(
+        icon("hand-pointer"),
+        " Haga clic en una celda para ver el detalle de clientes",
+        style = "font-size:11px; color:#888; margin-bottom:8px;"
+      ),
+      
+      reactable::reactableOutput(ns("tabla_resumen_mensual")),
+      
       hr(),
-      h5("Matriz de Transicion de Estado — Presupuestados",
-         style = "font-weight:600; margin-bottom:4px;"),
-      uiOutput(ns("lbl_transicion_p")),
-      fluidRow(
-        column(6, gt::gt_output(ns("tabla_p_transicion"))),
-        column(6, plotly::plotlyOutput(ns("sankey_p"), height = "400px"))
-      ),
-      br(),
-      # BotonDescarga de Racafe reemplaza downloadButton manual
-      BotonDescarga("dl_presup", color = "#2C7BB6", ns = ns,
-                    title = "Descargar Unidades Presupuestadas")
-    ),
-    
-    # ── NO PRESUPUESTADOS ─────────────────────────────────────────────────────
-    bs4Dash::bs4Card(
-      title        = tagList(icon("user-clock"), " Unidades Comerciales No Presupuestadas"),
-      width        = 12, solidHeader = TRUE, status = "white", collapsible = TRUE,
       
-      h6(uiOutput(ns("lbl_inicio_np")),
-         style = "font-weight:600; color:#2C7BB6; margin-bottom:4px;"),
-      fluidRow(
-        column(3, CajaModalUI(ns("kpi_np_activo_ini"))),
-        column(3, CajaModalUI(ns("kpi_np_recuperar_ini"))),
-        column(3, CajaModalUI(ns("kpi_np_nuevos_ini"))),
-        column(3, CajaModalUI(ns("kpi_np_tasa_fact")))
-      ),
-      h6(uiOutput(ns("lbl_fin_np")),
-         style = "font-weight:600; color:#F4A820; margin-bottom:4px; margin-top:8px;"),
-      fluidRow(
-        column(3, CajaModalUI(ns("kpi_np_activo_fin"))),
-        column(3, CajaModalUI(ns("kpi_np_recuperar_fin"))),
-        column(3, CajaModalUI(ns("kpi_np_nuevos_fin"))),
-        # kpi_np_tasa_fact es el mismo ID en inicio y fin (sin boton, solo lectura)
-        column(3, CajaModalUI(ns("kpi_np_tasa_fact_fin")))
+      # Comentario de panel ejecucion vs presupuesto
+      .te_seccion(
+        "Ejecución vs Presupuesto",
+        "bullseye"
       ),
       
-      h6("Distribucion por Tasa de Facturacion — No Presupuestados",
-         style = "font-weight:600; color:#555; margin-top:10px; margin-bottom:4px;"),
-      reactable::reactableOutput(ns("tabla_np_rangos_fact")),
-      p(icon("hand-pointer"),
-        " Haga clic en una fila para ver el detalle de las Unidades Comerciales",
-        style = "font-size:11px; color:#888; margin-top:4px; margin-bottom:8px;"),
+      uiOutput(ns("panel_ejecucion")),
       
-      h6("Indicadores Dinamicos — No Presupuestados",
-         style = "font-weight:600; color:#555; margin-top:6px;"),
-      fluidRow(
-        column(4, CajaModalUI(ns("kpi_np_retencion"))),
-        column(4, CajaModalUI(ns("kpi_np_perdida"))),
-        column(4, CajaModalUI(ns("kpi_np_reactivacion")))
-      ),
-      fluidRow(
-        column(4, .kpi_nota("Activos t → Activos t+1 / Total Activos en t")),
-        column(4, .kpi_nota("Activos t → A Recuperar t+1 / Total Activos en t")),
-        column(4, .kpi_nota("A Recuperar t → Activos t+1 / Total A Recuperar en t"))
-      ),
-      
-      fluidRow(
-        column(7, plotly::plotlyOutput(ns("graf_np_evolucion"),   height = "300px")),
-        column(5, plotly::plotlyOutput(ns("graf_np_permanencia"), height = "300px"))
-      ),
       hr(),
-      h5("Resumen mensual — Estado de la Poblacion No Presupuestada",
-         style = "font-weight:600; margin-bottom:4px;"),
-      p(icon("hand-pointer"),
-        " Haga clic en una celda para ver el detalle de las Unidades Comerciales",
-        style = "font-size:11px; color:#888; margin-bottom:8px;"),
-      reactable::reactableOutput(ns("tabla_np_resumen")),
-      hr(),
-      h5("Matriz de Transicion de Estado — No Presupuestados",
-         style = "font-weight:600; margin-bottom:4px;"),
-      uiOutput(ns("lbl_transicion_np")),
-      fluidRow(
-        column(6, gt::gt_output(ns("tabla_np_transicion"))),
-        column(6, plotly::plotlyOutput(ns("sankey_np"), height = "400px"))
+      
+      # Comentario de graficos de evolucion y permanencia
+      .te_seccion(
+        "Evolución y Permanencia",
+        "chart-bar"
       ),
-      br(),
+      
       fluidRow(
-        column(4, BotonDescarga("dl_np_todos",     color = "#F4A820", ns = ns,
-                                title = "Descargar No Presupuestados")),
-        column(4, BotonDescarga("dl_np_nuevos",    color = "#27AE60", ns = ns,
-                                title = "Descargar Altas en Cohorte")),
-        column(4, BotonDescarga("dl_np_recuperar", color = "#E74C3C", ns = ns,
-                                title = "Descargar Clientes a Recuperar"))
+        
+        # Comentario de grafico de evolucion
+        column(7,
+               h6(
+                 "Evolución Mensual por Estado",
+                 style = "font-weight:600; margin-bottom:4px;"
+               ),
+               
+               plotly::plotlyOutput(
+                 ns("graf_evolucion"),
+                 height = "300px"
+               )
+        ),
+        
+        # Comentario de grafico de permanencia
+        column(5,
+               h6(
+                 "Permanencia por Estado",
+                 style = "font-weight:600; margin-bottom:4px;"
+               ),
+               
+               plotly::plotlyOutput(
+                 ns("graf_permanencia"),
+                 height = "300px"
+               )
+        )
       )
     )
   )
 }
-
-# ==============================================================================
-# Configuracion de presupuestos grupales
-# ==============================================================================
-
-.PPTO_GRUPO <- tibble::tribble(
-  ~LinNegCod, ~grupo,                  ~ppto_sacos_anual, ~ppto_margen_anual,
-  1,          "NUEVO DEL PERIODO",      120000,            15000000,
-  2,          "NUEVO DEL PERIODO",       80000,            10000000,
-  1,          "CLIENTE A RECUPERAR",    200000,            25000000,
-  2,          "CLIENTE A RECUPERAR",    150000,            18000000
-) %>% mutate(LinNegCod = as.double(LinNegCod))
-
-# ==============================================================================
-# SERVER
-# ==============================================================================
-
-Cohortes <- function(id, data_tx, fecha_rango) {
-  
+Cohortes <- function(id, data_tx, fecha_rango = NULL) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
     
-    # ── Carga y preparacion de CRMNALSEGR ────────────────────────────────────
-    
-    crm_data <- reactive({
-      CargarDatos("CRMNALSEGR") %>%
-        mutate(
-          FecProceso = as.Date(FecProceso),
-          cliente_id = paste(CliNitPpal, LinNegCod, sep = "_")
+    # Helpers ----
+    # Colores semafóricos para KPIs de tasa
+    .color_kpi <- function(v, tipo) {
+      if (is.null(v) || is.na(v)) return("#999999")
+      switch(tipo,
+             retencion   = if (v >= 0.80) "#27AE60" else if (v >= 0.60) "#F4A820" else "#E74C3C",
+             perdida     = if (v <= 0.10) "#27AE60" else if (v <= 0.20) "#F4A820" else "#E74C3C",
+             reactivacion = if (v >= 0.30) "#27AE60" else if (v >= 0.15) "#F4A820" else "#E74C3C",
+             tasa_fact   = if (v >= 0.70) "#27AE60" else if (v >= 0.50) "#F4A820" else "#E74C3C",
+             "#999999"
+      )
+    }
+    # Reactable de UCs para modales — patrón Cohortes existente
+    .reactable_uc <- function(data, click_id) {
+      reactable::reactable(
+        data %>%
+          select(any_of(c("PerRazSoc", "Asesor", "Segmento",
+                          "estado", "presupuestada", "cliente_id"))) %>%
+          distinct(),
+        onClick  = reactable::JS(sprintf(
+          "function(rowInfo) { Shiny.setInputValue('%s',
+            {cliente_id: rowInfo.values['cliente_id'],
+             nonce: Math.random()}, {priority: 'event'}); }",
+          click_id
+        )),
+        columns = list(
+          cliente_id    = reactable::colDef(show = FALSE),
+          PerRazSoc     = reactable::colDef(name = "Cliente",       minWidth = 200),
+          Asesor        = reactable::colDef(name = "Asesor",        minWidth = 120),
+          Segmento      = reactable::colDef(name = "Segmento",      minWidth = 100),
+          estado        = reactable::colDef(name = "Estado",        minWidth = 150),
+          presupuestada = reactable::colDef(name = "Presupuesto",   minWidth = 120)
+        ),
+        highlight = TRUE, compact = TRUE, bordered = TRUE,
+        pagination = FALSE, searchable = TRUE
+      )
+    }
+    # Handler de descarga Excel — patrón Cohortes existente
+    .dl_handler <- function(datos_fn, prefijo) {
+      downloadHandler(
+        filename = function() paste0(prefijo, "_", Sys.Date(), ".xlsx"),
+        content  = function(file) writexl::write_xlsx(datos_fn(), path = file)
+      )
+    }
+    # Modal con tabla de clientes — se usa en tabla resumen mensual
+    .show_modal <- function(titulo, icono_nm, data_clientes, modal_id) {
+      click_id <- paste0("click_", modal_id)
+      cumpl_id <- paste0("cumpl_", modal_id)
+      
+      showModal(modalDialog(
+        title = tagList(icon(icono_nm), " ", titulo),
+        size = "xl", easyClose = TRUE, footer = modalButton("Cerrar"),
+        tagList(
+          .reactable_uc(data_clientes, ns(click_id)),
+          p(icon("hand-pointer"),
+            " Haga clic en una fila para ver el detalle de cumplimiento",
+            style = "font-size:11px; color:#888; margin-top:4px;"),
+          uiOutput(ns(cumpl_id))
         )
-    }) %>% bindCache("CRMNALSEGR")
+      ))
+      
+      observeEvent(input[[click_id]], {
+        req(!is.null(input[[click_id]]$cliente_id))
+        cid      <- input[[click_id]]$cliente_id
+        fila     <- data_clientes %>% filter(cliente_id == cid)
+        req(nrow(fila) > 0)
+        rsoc      <- fila$PerRazSoc[[1]]
+        es_presup <- fila$presupuestada[[1]] == "PRESUPUESTADA"
+        
+        # panel_cumpl_grupal no está implementado — solo mostrar cumplimiento
+        # para presupuestadas; resto muestra aviso.
+        panel_c <- if (es_presup) panel_cumpl() else NULL
+        
+        output[[cumpl_id]] <<- renderUI({
+          if (is.null(panel_c) || !(cid %in% panel_c$cliente_id)) {
+            return(tagList(
+              hr(),
+              p(icon("info-circle"),
+                " Sin presupuesto asignado en el periodo.",
+                style = "color:#888; font-style:italic; margin-top:10px;")
+            ))
+          }
+          gt_id <- paste0("gt_", gsub("[^A-Za-z0-9]", "_", cid), "_", modal_id)
+          output[[gt_id]] <<- gt::render_gt({
+            req(meses_con_real())
+            .gt_cumpl_uc(panel_c, cid, rsoc, meses_con_real())
+          })
+          tagList(hr(), gt::gt_output(ns(gt_id)))
+        })
+      }, ignoreNULL = TRUE, ignoreInit = TRUE, once = FALSE)
+    }
+    # Convierte etiqueta de población a sufijo de ID válido para Shiny/JS
+    .pob_id <- function(p) gsub("[^A-Za-z0-9]", "_", p)
     
-    meses_crm_disponibles <- reactive({
-      req(crm_data())
-      crm_data() %>%
-        distinct(FecProceso) %>%
-        pull(FecProceso) %>%
-        PrimerDia(uni = "month") %>%
-        unique() %>%
-        sort()
-    })
+    # Parametros ----
     
-    # ── Periodo: gobernado por el input global FT_Fecha ───────────────────────
-    
-    mes_inicio    <- reactive({
-      req(fecha_rango())
-      PrimerDia(fecha_rango()[1], uni = "month")
+    fecha_rango_efectiva <- reactive({
+      if (!is.null(fecha_rango) && !is.null(fecha_rango())) {
+        fecha_rango()
+      } else {
+        c(
+          as.Date(sprintf("%d-01-01", year(Sys.Date()))),
+          PrimerDia(Sys.Date())
+        )
+      }
     })
-    mes_fin       <- reactive({
-      req(fecha_rango())
-      PrimerDia(fecha_rango()[2], uni = "month")
+    anio_vigente <- reactive({
+      req(fecha_rango_efectiva())
+      year(fecha_rango_efectiva()[2])
     })
+    mes_inicio <- reactive({
+      req(anio_vigente())
+      as.Date(sprintf("%d-01-01", anio_vigente()))
+    })
+    mes_vigente <- reactive({ PrimerDia(Sys.Date()) })
     meses_periodo <- reactive({
-      req(mes_inicio(), mes_fin())
-      seq.Date(mes_inicio(), mes_fin(), by = "month")
+      req(mes_inicio(), mes_vigente())
+      seq.Date(mes_inicio(), mes_vigente(), by = "month")
     })
-    n_meses       <- reactive({ length(meses_periodo()) })
+    n_meses <- reactive({ length(meses_periodo()) })
     
-    # ── Transacciones limpias ─────────────────────────────────────────────────
+    # Datos ----
     
+    # CRMNALSEGR con cliente_id compuesto
+    crm_data <- reactive({
+      waiter_show(html = preloader_actualizar$html, color = preloader_actualizar$color)
+      on.exit(waiter_hide())  
+      CargarDatos("CRMNALSEGR") %>%
+        mutate(FecProceso = as.Date(FecProceso),
+               cliente_id = paste(CliNitPpal, LinNegCod, sep = "_"))
+    }) %>% bindCache("CRMNALSEGR")
+    # Último corte disponible en crm_data (primer día hábil = cierre del mes anterior)
+    ultimo_corte <- reactive({
+      req(crm_data())
+      max(crm_data()$FecProceso)
+    })
+    # Transacciones limpias del año seleccionado
     tx_limpia <- reactive({
-      req(data_tx())
+      waiter_show(html = preloader_actualizar$html, color = preloader_actualizar$color)
+      req(data_tx(), anio_vigente())
       data_tx() %>%
-        filter(Excluir == "NO", ProdExcluir == "NO", !is.na(FecFact)) %>%
-        mutate(
-          FecFact    = as.Date(FecFact),
-          ym         = PrimerDia(FecFact, uni = "month"),
-          cliente_id = paste(CliNitPpal, LinNegCod, sep = "_")
+        filter(Excluir      == "NO",
+               ProdExcluir  == "NO",
+               !is.na(FecFact),
+               year(FecFact) == anio_vigente()) %>%
+        mutate(FecFact    = as.Date(FecFact),
+               ym         = PrimerDia(FecFact),
+               cliente_id = paste(CliNitPpal, LinNegCod, sep = "_")
         )
     })
     
-    # ── Catalogo razon social / asesor / segmento ─────────────────────────────
-    
+    # Catálogo razón social / asesor / segmento
     catalogo_rs <- reactive({
-      req(tx_limpia())
-      attrs_tx <- tx_limpia() %>%
-        filter(!is.na(PerRazSoc) | !is.na(Asesor) | !is.na(Segmento)) %>%
-        group_by(cliente_id, CliNitPpal, LinNegCod) %>%
-        summarise(
-          PerRazSoc = first(PerRazSoc[!is.na(PerRazSoc)]),
-          Asesor    = first(Asesor[!is.na(Asesor)]),
-          Segmento  = first(Segmento[!is.na(Segmento)]),
-          .groups   = "drop"
-        )
+      waiter_show(html = preloader_actualizar$html, color = preloader_actualizar$color)
+      req(tx_limpia(), crm_data())
       
-      rs_ncliente <- NCLIENTE %>%
-        select(PerCod, PerRazSoc) %>%
-        distinct() %>%
-        rename(CliNitPpal = PerCod, PerRazSoc_nc = PerRazSoc)
+      # Atributos dimensionales desde CRMNALCLIENTE (fuente correcta)
+      # Snapshot vigente: último registro por cliente-línea
+      attrs_crm <- CargarDatos("CRMNALCLIENTE") %>%
+        mutate(FecProceso = as.Date(FecProceso)) %>%
+        group_by(CliNitPpal, LinNegCod) %>%
+        filter(FecProceso == max(FecProceso)) %>%
+        slice(1L) %>%
+        ungroup() %>%
+        mutate(
+          cliente_id = paste(CliNitPpal, LinNegCod, sep = "_"),
+          Segmento   = if_else(Segmento == "GRANDES", "GRANDE", Segmento),
+          Asesor     = str_squish(str_to_upper(Asesor))
+        ) %>%
+        select(cliente_id, CliNitPpal, LinNegCod, Asesor, Segmento)
       
+      # Razón social desde NCLIENTE (fuente correcta)
+      razon_social <- NCLIENTE %>%
+        select(CliNitPpal = PerCod, PerRazSoc) %>%
+        distinct()
+      
+      # Base: todos los clientes del panel CRM
       crm_data() %>%
         distinct(cliente_id, CliNitPpal, LinNegCod) %>%
-        left_join(attrs_tx,    by = c("cliente_id", "CliNitPpal", "LinNegCod")) %>%
-        left_join(rs_ncliente, by = "CliNitPpal") %>%
+        left_join(attrs_crm,    by = c("cliente_id", "CliNitPpal", "LinNegCod")) %>%
+        left_join(razon_social, by = "CliNitPpal") %>%
         mutate(
-          PerRazSoc = coalesce(PerRazSoc, PerRazSoc_nc, "\u2014"),
-          Asesor    = replace_na(Asesor,   "\u2014"),
-          Segmento  = replace_na(Segmento, "\u2014")
+          PerRazSoc = coalesce(PerRazSoc, "\u2014"),
+          Asesor    = coalesce(Asesor,    "\u2014"),
+          Segmento  = coalesce(Segmento,  "\u2014")
         ) %>%
-        select(cliente_id, PerRazSoc, Asesor, Segmento)
+        select(cliente_id, CliNitPpal, LinNegCod, PerRazSoc, Asesor, Segmento)
+    })
+    # Versión slim del catálogo: solo atributos dimensionales nuevos.
+    # Usar en joins sobre bases que ya traen CliNitPpal y LinNegCod.
+    catalogo_slim <- reactive({
+      catalogo_rs() %>% select(cliente_id, PerRazSoc, Asesor, Segmento)
     })
     
-    # ── Marca de presupuesto por UC ───────────────────────────────────────────
-    
+    # Marca de presupuesto por UC desde el primer mes del año
     marca_presupuesto <- reactive({
       req(tx_limpia(), mes_inicio())
       tx_limpia() %>%
@@ -559,12 +504,10 @@ Cohortes <- function(id, data_tx, fecha_rango) {
         )
     })
     
-    # ── Ventas reales mensuales y acumuladas ──────────────────────────────────
-    
+    # Ventas reales mensuales
     real_mensual <- reactive({
-      req(tx_limpia(), mes_inicio(), mes_fin())
+      req(tx_limpia())
       tx_limpia() %>%
-        filter(ym >= mes_inicio(), ym <= mes_fin()) %>%
         group_by(cliente_id, ym) %>%
         summarise(
           real_sacos  = sum(coalesce(SacFact70, 0), na.rm = TRUE),
@@ -573,130 +516,27 @@ Cohortes <- function(id, data_tx, fecha_rango) {
         )
     })
     
-    fechas_fact <- reactive({
-      req(real_mensual())
-      real_mensual() %>%
-        filter(real_sacos > 0) %>%
-        group_by(cliente_id) %>%
-        summarise(
-          primera_fact = min(ym),
-          ultima_fact  = max(ym),
-          .groups = "drop"
-        )
-    })
-    
-    real_acum <- reactive({
-      req(real_mensual())
-      real_mensual() %>%
-        group_by(cliente_id) %>%
-        summarise(
-          sacos_total  = sum(real_sacos,  na.rm = TRUE),
-          margen_total = sum(real_margen, na.rm = TRUE),
-          .groups = "drop"
-        )
-    })
-    
-    # ── Panel de cumplimiento individual (presupuestadas) ─────────────────────
-    
-    panel_cumpl <- reactive({
-      req(marca_presupuesto(), real_mensual(), meses_periodo())
-      marca_presupuesto() %>%
-        filter(presupuestada == "PRESUPUESTADA") %>%
-        select(cliente_id, ppto_sacos_anual, ppto_margen_anual) %>%
-        crossing(tibble(ym = meses_periodo())) %>%
-        mutate(
-          ppto_sacos_mes  = ppto_sacos_anual  / n_meses(),
-          ppto_margen_mes = ppto_margen_anual / n_meses()
-        ) %>%
-        left_join(real_mensual(), by = c("cliente_id", "ym")) %>%
-        mutate(
-          real_sacos       = replace_na(real_sacos,  0),
-          real_margen      = replace_na(real_margen, 0),
-          cumpl_sacos_pct  = if_else(
-            ppto_sacos_mes  > 0,
-            round(real_sacos  / ppto_sacos_mes  * 100, 1), NA_real_
-          ),
-          cumpl_margen_pct = if_else(
-            ppto_margen_mes > 0,
-            round(real_margen / ppto_margen_mes * 100, 1), NA_real_
-          )
-        )
-    })
-    
+    # Meses con facturación real (para gt de cumplimiento)
     meses_con_real <- reactive({
       req(real_mensual())
       real_mensual() %>%
-        filter(real_sacos > 0 | real_margen > 0) %>%
+        filter(real_sacos > 0) %>%
         pull(ym) %>%
         unique() %>%
         sort()
     })
     
-    # ── Panel de cumplimiento grupal (NP con estado especial) ─────────────────
+    # Panel Longitudinal ----
     
-    panel_cumpl_grupal <- reactive({
-      req(panel_full(), real_mensual(), meses_periodo())
-      ucs_grupo <- panel_full() %>%
-        filter(
-          presupuestada == "NO PRESUPUESTADA",
-          estado %in% c("NUEVO DEL PERIODO", "CLIENTE A RECUPERAR")
-        ) %>%
-        select(cliente_id, LinNegCod, ym, estado)
-      
-      n_ucs_mes <- ucs_grupo %>%
-        group_by(LinNegCod, estado, ym) %>%
-        summarise(n_ucs = n_distinct(cliente_id), .groups = "drop")
-      
-      ucs_grupo %>%
-        left_join(
-          .PPTO_GRUPO %>%
-            mutate(LinNegCod = as.double(LinNegCod)) %>%
-            rename(estado = grupo),
-          by = c("LinNegCod", "estado")
-        ) %>%
-        left_join(n_ucs_mes, by = c("LinNegCod", "estado", "ym")) %>%
-        mutate(
-          ppto_sacos_mes  = if_else(
-            !is.na(ppto_sacos_anual)  & n_ucs > 0,
-            ppto_sacos_anual  / 12 / n_ucs, NA_real_
-          ),
-          ppto_margen_mes = if_else(
-            !is.na(ppto_margen_anual) & n_ucs > 0,
-            ppto_margen_anual / 12 / n_ucs, NA_real_
-          )
-        ) %>%
-        left_join(real_mensual(), by = c("cliente_id", "ym")) %>%
-        mutate(
-          real_sacos       = replace_na(real_sacos,  0),
-          real_margen      = replace_na(real_margen, 0),
-          cumpl_sacos_pct  = if_else(
-            !is.na(ppto_sacos_mes)  & ppto_sacos_mes  > 0,
-            round(real_sacos  / ppto_sacos_mes  * 100, 1), NA_real_
-          ),
-          cumpl_margen_pct = if_else(
-            !is.na(ppto_margen_mes) & ppto_margen_mes > 0,
-            round(real_margen / ppto_margen_mes * 100, 1), NA_real_
-          )
-        ) %>%
-        select(
-          cliente_id, LinNegCod, ym, estado,
-          ppto_sacos_mes, real_sacos, cumpl_sacos_pct,
-          ppto_margen_mes, real_margen, cumpl_margen_pct
-        )
-    })
-    
-    # ── Actividad mensual desde CRM ───────────────────────────────────────────
-    
+    # Actividad mensual desde CRMNALSEGR
     actividad_mensual <- reactive({
-      req(crm_data(), mes_inicio(), mes_fin())
+      req(crm_data(), mes_inicio(), mes_vigente())
       crm_data() %>%
-        filter(FecProceso >= mes_inicio(), FecProceso <= mes_fin()) %>%
-        mutate(ym = PrimerDia(FecProceso, uni = "month")) %>%
+        filter(FecProceso >= mes_inicio(), FecProceso <= mes_vigente()) %>%
+        mutate(ym = PrimerDia(FecProceso)) %>%
         distinct(cliente_id, ym, SegmentoRacafe)
     })
-    
-    # ── Poblacion baseline (existentes en mes_inicio) ─────────────────────────
-    
+    # Baseline: clientes existentes en enero del año seleccionado
     baseline <- reactive({
       req(crm_data(), marca_presupuesto(), mes_inicio())
       crm_data() %>%
@@ -714,19 +554,16 @@ Cohortes <- function(id, data_tx, fecha_rango) {
           tipo_cohorte  = "POBLACION BASE"
         )
     })
-    
-    # ── Altas en cohorte (nuevos que facturan en el periodo) ──────────────────
-    
+    # Altas en cohorte: nuevos que facturan en el año, acumulativas
     altas_cohorte <- reactive({
-      req(tx_limpia(), baseline(), mes_inicio(), mes_fin())
+      req(tx_limpia(), baseline(), mes_inicio())
       nits_baseline          <- baseline() %>% distinct(CliNitPpal)
       nits_fact_pre_baseline <- FACT %>%
         filter(as.Date(MinFecFact) < mes_inicio()) %>%
         distinct(FctNit) %>%
         rename(CliNitPpal = FctNit)
-      
       tx_limpia() %>%
-        filter(ym >= mes_inicio(), ym <= mes_fin()) %>%
+        filter(ym >= mes_inicio(), ym <= mes_vigente()) %>%
         distinct(CliNitPpal, LinNegCod, cliente_id) %>%
         anti_join(nits_baseline,          by = "CliNitPpal") %>%
         anti_join(nits_fact_pre_baseline, by = "CliNitPpal") %>%
@@ -739,1713 +576,945 @@ Cohortes <- function(id, data_tx, fecha_rango) {
           tipo_cohorte  = "ALTA EN COHORTE"
         )
     })
-    
-    # ── Panel baseline: estado CRM mes a mes ─────────────────────────────────
-    
+    # Panel baseline: estado mes a mes desde CRMNALSEGR
     panel_baseline <- reactive({
-      # Panel cerrado: cada UC de baseline aparece en TODOS los meses del periodo.
-      # Estado = lo que CRM diga ese mes; si no aparece → "CLIENTE A RECUPERAR"
       req(baseline(), actividad_mensual(), meses_periodo())
       baseline() %>%
-        select(cliente_id, CliNitPpal, LinNegCod, presupuestada, tipo_cohorte) %>%
         crossing(tibble(ym = meses_periodo())) %>%
-        left_join(
-          actividad_mensual() %>% select(cliente_id, ym, SegmentoRacafe),
-          by = c("cliente_id", "ym")
-        ) %>%
+        left_join(actividad_mensual(), by = c("cliente_id", "ym")) %>%
         mutate(estado = case_when(
           SegmentoRacafe == "CLIENTE"             ~ "CLIENTE ACTIVO",
           SegmentoRacafe == "CLIENTE A RECUPERAR" ~ "CLIENTE A RECUPERAR",
           TRUE                                    ~ "CLIENTE A RECUPERAR"
         )) %>%
-        select(cliente_id, CliNitPpal, LinNegCod, presupuestada, tipo_cohorte, ym, estado)
+        select(cliente_id, CliNitPpal, LinNegCod, presupuestada,
+               tipo_cohorte, ym, estado)
     })
-    
-    # ── Panel altas: NP fijo, presupuestadas evolucionan con CRM ─────────────
-    
+    # Panel altas: nuevos con estado fijo "NUEVO DEL PERIODO"
     panel_altas <- reactive({
-      # A) NP: estado fijo "NUEVO DEL PERIODO" desde mes_entrada hasta mes_fin
-      # B) Presupuestadas: estado evoluciona con CRM igual que baseline
-      req(altas_cohorte(), actividad_mensual(), real_mensual(), meses_periodo())
-      
-      primer_mes_crm <- actividad_mensual() %>%
+      req(tx_limpia(), altas_cohorte(), meses_periodo())
+      # Mes de primera factura por cliente nuevo
+      primer_mes_nuevo <- tx_limpia() %>%
         semi_join(altas_cohorte(), by = "cliente_id") %>%
         group_by(cliente_id) %>%
-        summarise(mes_alta_crm = min(ym), .groups = "drop")
+        summarise(mes_entrada = min(ym), .groups = "drop")
       
-      primer_mes_tx <- real_mensual() %>%
-        semi_join(altas_cohorte(), by = "cliente_id") %>%
-        filter(real_sacos > 0) %>%
-        group_by(cliente_id) %>%
-        summarise(mes_alta_tx = min(ym), .groups = "drop")
-      
-      altas_base <- altas_cohorte() %>%
-        select(cliente_id, CliNitPpal, LinNegCod, presupuestada, tipo_cohorte) %>%
-        left_join(primer_mes_crm, by = "cliente_id") %>%
-        left_join(primer_mes_tx,  by = "cliente_id") %>%
-        mutate(
-          mes_entrada = pmin(
-            coalesce(mes_alta_crm, as.Date("9999-01-01")),
-            coalesce(mes_alta_tx,  as.Date("9999-01-01"))
-          ),
-          mes_entrada = if_else(
-            mes_entrada == as.Date("9999-01-01"),
-            mes_inicio(), mes_entrada
-          ),
-          mes_entrada = pmax(mes_entrada, mes_inicio())
-        )
-      
-      # Altas NP: estado fijo
-      altas_np <- altas_base %>%
-        filter(presupuestada == "NO PRESUPUESTADA") %>%
+      altas_cohorte() %>%
+        left_join(primer_mes_nuevo, by = "cliente_id") %>%
+        mutate(mes_entrada = coalesce(mes_entrada, mes_inicio())) %>%
         crossing(tibble(ym = meses_periodo())) %>%
+        # Solo aparece desde su mes de entrada en adelante
         filter(ym >= mes_entrada) %>%
         mutate(estado = "NUEVO DEL PERIODO") %>%
-        select(cliente_id, CliNitPpal, LinNegCod, presupuestada, tipo_cohorte,
-               ym, estado, mes_entrada)
-      
-      # Altas presupuestadas: estado evoluciona con CRM
-      altas_p <- altas_base %>%
-        filter(presupuestada == "PRESUPUESTADA") %>%
-        crossing(tibble(ym = meses_periodo())) %>%
-        filter(ym >= mes_entrada) %>%
-        left_join(
-          actividad_mensual() %>% select(cliente_id, ym, SegmentoRacafe),
-          by = c("cliente_id", "ym")
-        ) %>%
-        mutate(estado = case_when(
-          SegmentoRacafe == "CLIENTE"             ~ "CLIENTE ACTIVO",
-          SegmentoRacafe == "CLIENTE A RECUPERAR" ~ "CLIENTE A RECUPERAR",
-          TRUE                                    ~ "CLIENTE A RECUPERAR"
-        )) %>%
-        select(cliente_id, CliNitPpal, LinNegCod, presupuestada, tipo_cohorte,
-               ym, estado, mes_entrada)
-      
-      bind_rows(altas_np, altas_p)
+        select(cliente_id, CliNitPpal, LinNegCod, presupuestada,
+               tipo_cohorte, ym, estado, mes_entrada)
     })
-    
-    # ── Panel completo y subpaneles ───────────────────────────────────────────
-    
+    # Panel completo: baseline + altas
     panel_full <- reactive({
+      waiter_show(html = preloader_actualizar$html, color = preloader_actualizar$color)
       req(panel_baseline(), panel_altas())
       bind_rows(
         panel_baseline() %>% mutate(mes_entrada = mes_inicio()),
         panel_altas()
-      )
+      ) %>%
+        # Usar catalogo_slim: CliNitPpal y LinNegCod ya vienen de panel_baseline/altas
+        left_join(catalogo_slim(), by = "cliente_id")
     })
     
-    panel_p    <- reactive(panel_full() %>% filter(presupuestada == "PRESUPUESTADA"))
-    panel_np   <- reactive(panel_full() %>% filter(presupuestada == "NO PRESUPUESTADA"))
-    ultimo_mes <- reactive(max(panel_full()$ym))
+    panel_p  <- reactive(panel_full() %>% filter(presupuestada == "PRESUPUESTADA"))
+    panel_np <- reactive(panel_full() %>% filter(presupuestada == "NO PRESUPUESTADA"))
     
-    # ── Tasa de facturacion por UC ────────────────────────────────────────────
-    
-    tasa_fact_uc <- reactive({
-      req(panel_full(), real_mensual())
-      meses_en_cohorte <- panel_full() %>%
-        group_by(cliente_id, mes_entrada) %>%
-        summarise(meses_cohorte = n_distinct(ym), .groups = "drop")
-      
-      meses_activo <- real_mensual() %>%
-        filter(real_sacos > 0) %>%
-        semi_join(panel_full() %>% distinct(cliente_id), by = "cliente_id") %>%
-        left_join(
-          panel_full() %>% distinct(cliente_id, mes_entrada),
-          by = "cliente_id"
-        ) %>%
-        filter(ym >= mes_entrada, ym >= mes_inicio(), ym <= mes_fin()) %>%
-        group_by(cliente_id) %>%
-        summarise(meses_con_fact = n_distinct(ym), .groups = "drop")
-      
-      meses_en_cohorte %>%
-        left_join(meses_activo, by = "cliente_id") %>%
-        mutate(
-          meses_con_fact = replace_na(meses_con_fact, 0),
-          tasa_fact_pct  = round(meses_con_fact / pmax(meses_cohorte, 1) * 100, 1)
-        ) %>%
-        select(cliente_id, meses_cohorte, meses_con_fact, tasa_fact_pct)
-    })
-    
-    # ── Indicadores de transicion de cohorte ──────────────────────────────────
-    
-    .indicadores_cohorte <- function(panel) {
-      trans <- panel %>%
-        filter(tipo_cohorte == "POBLACION BASE") %>%
-        arrange(cliente_id, ym) %>%
-        group_by(cliente_id) %>%
-        mutate(estado_sig = lead(estado)) %>%
-        ungroup() %>%
-        filter(!is.na(estado_sig))
-      
-      n_activo_t    <- sum(trans$estado == "CLIENTE ACTIVO")
-      n_recuperar_t <- sum(trans$estado == "CLIENTE A RECUPERAR")
-      n_ret         <- sum(trans$estado == "CLIENTE ACTIVO"      & trans$estado_sig == "CLIENTE ACTIVO")
-      n_perd        <- sum(trans$estado == "CLIENTE ACTIVO"      & trans$estado_sig == "CLIENTE A RECUPERAR")
-      n_react       <- sum(trans$estado == "CLIENTE A RECUPERAR" & trans$estado_sig == "CLIENTE ACTIVO")
-      
-      list(
-        retencion    = if (n_activo_t    > 0) round(n_ret   / n_activo_t    * 100, 1) else NA_real_,
-        perdida      = if (n_activo_t    > 0) round(n_perd  / n_activo_t    * 100, 1) else NA_real_,
-        reactivacion = if (n_recuperar_t > 0) round(n_react / n_recuperar_t * 100, 1) else NA_real_
-      )
-    }
-    
-    ind_global <- reactive({ req(panel_full()); .indicadores_cohorte(panel_full()) })
-    ind_p      <- reactive({ req(panel_p());    .indicadores_cohorte(panel_p())    })
-    ind_np     <- reactive({ req(panel_np());   .indicadores_cohorte(panel_np())   })
-    
-    # ── Tasa de facturacion media por grupo ───────────────────────────────────
-    
-    .tasa_media <- function(ids) {
-      vals <- tasa_fact_uc() %>%
-        filter(cliente_id %in% ids) %>%
-        pull(tasa_fact_pct)
-      round(mean(vals, na.rm = TRUE), 1)
-    }
-    
-    tasa_fact_global <- reactive({
-      req(tasa_fact_uc())
-      .tasa_media(tasa_fact_uc()$cliente_id)
-    })
-    tasa_fact_p      <- reactive({
-      req(tasa_fact_uc(), panel_p())
-      .tasa_media(panel_p() %>% distinct(cliente_id) %>% pull())
-    })
-    tasa_fact_np     <- reactive({
-      req(tasa_fact_uc(), panel_np())
-      .tasa_media(panel_np() %>% distinct(cliente_id) %>% pull())
-    })
-    
-    # ── Corte en ultimo mes: tabla enriquecida para modales ───────────────────
-    
-    corte_ult <- reactive({
-      req(panel_full(), catalogo_rs(), real_acum(), tasa_fact_uc(),
-          fechas_fact(), panel_cumpl_grupal())
-      n_m <- n_meses()
-      
-      ppto_indiv <- marca_presupuesto() %>%
+    # Panel enriquecido con cumplimiento individual (presupuestados)
+    panel_cumpl <- reactive({
+      req(marca_presupuesto(), real_mensual(), meses_periodo())
+      marca_presupuesto() %>%
         filter(presupuestada == "PRESUPUESTADA") %>%
-        transmute(
-          cliente_id,
-          ppto_sacos  = ppto_sacos_anual  / 12 * n_m,
-          ppto_margen = ppto_margen_anual / 12 * n_m
-        )
-      
-      ppto_grupal_acum <- panel_cumpl_grupal() %>%
-        group_by(cliente_id) %>%
-        summarise(
-          ppto_sacos  = sum(ppto_sacos_mes,  na.rm = TRUE),
-          ppto_margen = sum(ppto_margen_mes, na.rm = TRUE),
-          .groups = "drop"
-        )
-      
-      ppto_total <- bind_rows(ppto_indiv, ppto_grupal_acum) %>%
-        group_by(cliente_id) %>%
-        summarise(
-          ppto_sacos  = sum(ppto_sacos,  na.rm = TRUE),
-          ppto_margen = sum(ppto_margen, na.rm = TRUE),
-          .groups = "drop"
-        ) %>%
-        filter(ppto_sacos > 0 | ppto_margen > 0)
-      
-      panel_full() %>%
-        filter(ym == ultimo_mes()) %>%
-        left_join(catalogo_rs(),  by = "cliente_id") %>%
-        left_join(real_acum(),    by = "cliente_id") %>%
-        left_join(tasa_fact_uc() %>% select(cliente_id, tasa_fact_pct), by = "cliente_id") %>%
-        left_join(fechas_fact(),  by = "cliente_id") %>%
-        left_join(ppto_total,     by = "cliente_id") %>%
-        mutate(
-          PerRazSoc        = replace_na(PerRazSoc,   "\u2014"),
-          Asesor           = replace_na(Asesor,       "\u2014"),
-          Segmento         = replace_na(Segmento,     "\u2014"),
-          sacos_total      = replace_na(sacos_total,  0),
-          margen_total     = replace_na(margen_total, 0),
-          fecha_ref        = case_when(
-            estado == "NUEVO DEL PERIODO"   ~ primera_fact,
-            estado == "CLIENTE A RECUPERAR" ~ ultima_fact,
-            TRUE                            ~ NA_Date_
-          ),
-          cumpl_sacos_pct  = if_else(
-            !is.na(ppto_sacos)  & ppto_sacos  > 0,
-            round(sacos_total  / ppto_sacos  * 100, 1), NA_real_
-          ),
-          cumpl_margen_pct = if_else(
-            !is.na(ppto_margen) & ppto_margen > 0,
-            round(margen_total / ppto_margen * 100, 1), NA_real_
-          )
-        ) %>%
-        select(
-          cliente_id, PerRazSoc, Asesor, Segmento,
-          CliNitPpal, LinNegCod,
-          presupuestada, tipo_cohorte, estado, fecha_ref,
-          sacos_total, margen_total, tasa_fact_pct,
-          ppto_sacos, ppto_margen, cumpl_sacos_pct, cumpl_margen_pct
-        ) %>%
-        arrange(CliNitPpal, LinNegCod)
-    })
-    
-    # ==========================================================================
-    # HELPER MODAL DINAMICO
-    # Nota: .show_modal se conserva para modales cuyo contenido depende
-    # del click (tabla resumen y rangos de tasa).  No aplica CajaModal porque
-    # la UC/estado/mes a mostrar se determina en tiempo de ejecucion.
-    # ==========================================================================
-    
-    .show_modal <- function(titulo, icono_nm, data_clientes, modal_id) {
-      click_id <- paste0("click_", modal_id)
-      cumpl_id <- paste0("cumpl_", modal_id)
-      
-      showModal(modalDialog(
-        title     = tagList(icon(icono_nm), " ", titulo),
-        size      = "xl", easyClose = TRUE, footer = modalButton("Cerrar"),
-        tagList(
-          .reactable_uc(data_clientes, ns(click_id)),
-          p(icon("hand-pointer"),
-            " Haga clic en una fila para ver el detalle de cumplimiento",
-            style = "font-size:11px; color:#888; margin-top:4px;"),
-          uiOutput(ns(cumpl_id))
-        )
-      ))
-      
-      # Observer de click en fila de la tabla del modal
-      # Se registra una vez por invocacion de .show_modal; el modal se destruye
-      # al cerrarse por lo que el observer queda inactivo hasta el siguiente click
-      observeEvent(input[[click_id]], {
-        req(!is.null(input[[click_id]]$cliente_id))
-        cid       <- input[[click_id]]$cliente_id
-        fila      <- data_clientes %>% filter(cliente_id == cid)
-        req(nrow(fila) > 0)
-        
-        rsoc       <- fila$PerRazSoc[[1]]
-        es_presup  <- fila$presupuestada[[1]] == "PRESUPUESTADA"
-        panel_c    <- if (es_presup) panel_cumpl() else panel_cumpl_grupal()
-        tiene_ppto <- cid %in% panel_c$cliente_id
-        
-        output[[cumpl_id]] <<- renderUI({
-          if (!tiene_ppto) {
-            return(tagList(
-              hr(),
-              p(icon("info-circle"),
-                " Esta Unidad Comercial no tiene presupuesto asignado en el periodo.",
-                style = "color:#888; font-style:italic; margin-top:10px;")
-            ))
-          }
-          gt_id <- paste0("gt_", gsub("[^A-Za-z0-9]", "_", cid), "_", modal_id)
-          output[[gt_id]] <<- gt::render_gt({
-            req(meses_con_real())
-            .gt_cumpl_uc(panel_c, cid, rsoc, meses_con_real())
-          })
-          tagList(hr(), gt::gt_output(ns(gt_id)))
-        })
-      }, ignoreNULL = TRUE, ignoreInit = TRUE, once = FALSE)
-    }
-    
-    # ==========================================================================
-    # KPIs — POBLACION BASE
-    # Patron CajaModal: registro previo obligatorio antes del primer click.
-    # Los outputs de la tabla del modal se declaran estaticamente aqui;
-    # CajaModal los presenta dentro de contenido_modal = function() { ... }
-    # ==========================================================================
-    
-    # Tablas estaticas para los modales de poblacion base
-    output$tbl_baseline   <- reactable::renderReactable({
-      req(corte_ult()); .reactable_uc(corte_ult(), ns("click_modal_baseline"))
-    })
-    output$tbl_presup_pop <- reactable::renderReactable({
-      req(corte_ult())
-      .reactable_uc(
-        corte_ult() %>% filter(presupuestada == "PRESUPUESTADA"),
-        ns("click_modal_presup_pop")
-      )
-    })
-    output$tbl_no_presup_pop <- reactable::renderReactable({
-      req(corte_ult())
-      .reactable_uc(
-        corte_ult() %>% filter(presupuestada == "NO PRESUPUESTADA",
-                               tipo_cohorte  == "POBLACION BASE"),
-        ns("click_modal_no_presup_pop")
-      )
-    })
-    output$tbl_nuevos_pop <- reactable::renderReactable({
-      req(corte_ult())
-      .reactable_uc(
-        corte_ult() %>% filter(tipo_cohorte == "ALTA EN COHORTE"),
-        ns("click_modal_nuevos_pop")
-      )
-    })
-    
-    # Helper para renderizar cumplimiento desde click en tabla de modal estatico
-    .bind_cumpl_modal <- function(click_id, cumpl_id) {
-      observeEvent(input[[click_id]], {
-        req(!is.null(input[[click_id]]$cliente_id))
-        cid       <- input[[click_id]]$cliente_id
-        fila      <- corte_ult() %>% filter(cliente_id == cid)
-        req(nrow(fila) > 0)
-        rsoc      <- fila$PerRazSoc[[1]]
-        es_presup <- fila$presupuestada[[1]] == "PRESUPUESTADA"
-        panel_c   <- if (es_presup) panel_cumpl() else panel_cumpl_grupal()
-        tiene_ppto <- cid %in% panel_c$cliente_id
-        output[[cumpl_id]] <<- renderUI({
-          if (!tiene_ppto) {
-            return(tagList(
-              hr(),
-              p(icon("info-circle"),
-                " Esta Unidad Comercial no tiene presupuesto asignado en el periodo.",
-                style = "color:#888; font-style:italic; margin-top:10px;")
-            ))
-          }
-          gt_id <- paste0("gt_cumpl_", gsub("[^A-Za-z0-9]", "_", cid))
-          output[[gt_id]] <<- gt::render_gt({
-            req(meses_con_real())
-            .gt_cumpl_uc(panel_c, cid, rsoc, meses_con_real())
-          })
-          tagList(hr(), gt::gt_output(ns(gt_id)))
-        })
-      }, ignoreNULL = TRUE, ignoreInit = TRUE)
-    }
-    
-    .bind_cumpl_modal("click_modal_baseline",     "cumpl_modal_baseline")
-    .bind_cumpl_modal("click_modal_presup_pop",   "cumpl_modal_presup_pop")
-    .bind_cumpl_modal("click_modal_no_presup_pop","cumpl_modal_no_presup_pop")
-    .bind_cumpl_modal("click_modal_nuevos_pop",   "cumpl_modal_nuevos_pop")
-    
-    # Registro de CajaModal para KPIs de poblacion base
-    CajaModal(
-      id            = "kpi_baseline",
-      valor         = reactive(nrow(baseline())),
-      formato       = "numero",
-      texto         = reactive(paste("Poblacion Base a", format(mes_inicio(), "%b %Y"))),
-      icono         = "users",
-      mostrar_boton = TRUE,
-      titulo_modal  = reactive(paste0("Poblacion Base — ", format(mes_inicio(), "%b %Y"))),
-      tamano_modal  = "xl",
-      contenido_modal = function() {
-        tagList(
-          reactable::reactableOutput(ns("tbl_baseline")),
-          p(icon("hand-pointer"),
-            " Haga clic en una fila para ver el detalle de cumplimiento",
-            style = "font-size:11px; color:#888; margin-top:4px;"),
-          uiOutput(ns("cumpl_modal_baseline"))
-        )
-      }
-    )
-    
-    CajaModal(
-      id            = "kpi_presup",
-      valor         = reactive(
-        baseline() %>% filter(presupuestada == "PRESUPUESTADA") %>% nrow()
-      ),
-      formato       = "numero",
-      texto         = reactive(paste("Presupuestadas a", format(mes_inicio(), "%b %Y"))),
-      icono         = "bullseye",
-      mostrar_boton = TRUE,
-      titulo_modal  = reactive("Unidades Presupuestadas — ultimo mes"),
-      tamano_modal  = "xl",
-      contenido_modal = function() {
-        tagList(
-          reactable::reactableOutput(ns("tbl_presup_pop")),
-          p(icon("hand-pointer"),
-            " Haga clic en una fila para ver el detalle de cumplimiento",
-            style = "font-size:11px; color:#888; margin-top:4px;"),
-          uiOutput(ns("cumpl_modal_presup_pop"))
-        )
-      }
-    )
-    
-    CajaModal(
-      id            = "kpi_no_presup",
-      valor         = reactive(
-        baseline() %>% filter(presupuestada == "NO PRESUPUESTADA") %>% nrow()
-      ),
-      formato       = "numero",
-      texto         = reactive(paste("No Presupuestadas a", format(mes_inicio(), "%b %Y"))),
-      icono         = "user-clock",
-      mostrar_boton = TRUE,
-      titulo_modal  = reactive("No Presupuestadas — ultimo mes"),
-      tamano_modal  = "xl",
-      contenido_modal = function() {
-        tagList(
-          reactable::reactableOutput(ns("tbl_no_presup_pop")),
-          p(icon("hand-pointer"),
-            " Haga clic en una fila para ver el detalle de cumplimiento",
-            style = "font-size:11px; color:#888; margin-top:4px;"),
-          uiOutput(ns("cumpl_modal_no_presup_pop"))
-        )
-      }
-    )
-    
-    CajaModal(
-      id            = "kpi_nuevos",
-      valor         = reactive(nrow(altas_cohorte())),
-      formato       = "numero",
-      texto         = reactive(paste("Altas en Cohorte a", format(mes_inicio(), "%b %Y"))),
-      icono         = "user-plus",
-      mostrar_boton = TRUE,
-      titulo_modal  = reactive("Altas en Cohorte — ultimo mes"),
-      tamano_modal  = "xl",
-      contenido_modal = function() {
-        tagList(
-          reactable::reactableOutput(ns("tbl_nuevos_pop")),
-          p(icon("hand-pointer"),
-            " Haga clic en una fila para ver el detalle de cumplimiento",
-            style = "font-size:11px; color:#888; margin-top:4px;"),
-          uiOutput(ns("cumpl_modal_nuevos_pop"))
-        )
-      }
-    )
-    
-    # ==========================================================================
-    # KPIs — INDICADORES DINAMICOS GLOBALES
-    # Sin boton (mostrar_boton = FALSE); valor coloreado con html_valor de
-    # racafeModulos usando .color_kpi para el semaforo
-    # ==========================================================================
-    
-    CajaModal(
-      id            = "kpi_retencion",
-      valor         = reactive(
-        html_valor(ind_global()$retencion %||% 0,
-                   formato = "porcentaje",
-                   color   = .color_kpi(ind_global()$retencion, "retencion"))
-      ),
-      texto         = "Retencion (Activo → Activo)",
-      icono         = "check-double",
-      mostrar_boton = FALSE
-    )
-    
-    CajaModal(
-      id            = "kpi_perdida",
-      valor         = reactive(
-        html_valor(ind_global()$perdida %||% 0,
-                   formato = "porcentaje",
-                   color   = .color_kpi(ind_global()$perdida, "perdida"))
-      ),
-      texto         = "Perdida Dinamica (Activo → A Recuperar)",
-      icono         = "arrow-down",
-      mostrar_boton = FALSE
-    )
-    
-    CajaModal(
-      id            = "kpi_reactivacion",
-      valor         = reactive(
-        html_valor(ind_global()$reactivacion %||% 0,
-                   formato = "porcentaje",
-                   color   = .color_kpi(ind_global()$reactivacion, "reactivacion"))
-      ),
-      texto         = "Reactivacion (A Recuperar → Activo)",
-      icono         = "sync-alt",
-      mostrar_boton = FALSE
-    )
-    
-    CajaModal(
-      id            = "kpi_tasa_fact",
-      valor         = reactive(
-        html_valor(tasa_fact_global() %||% 0,
-                   formato = "porcentaje",
-                   color   = .color_kpi(tasa_fact_global(), "tasa"))
-      ),
-      texto         = "Tasa de Facturacion Promedio",
-      icono         = "calendar-check",
-      mostrar_boton = FALSE
-    )
-    
-    # ==========================================================================
-    # HELPERS CONTEO Y LABELS
-    # ==========================================================================
-    
-    .n_uc <- function(df) dplyr::n_distinct(paste(df$CliNitPpal, df$LinNegCod))
-    
-    corte_ini_p     <- reactive({ req(panel_p());  panel_p()  %>% filter(ym == mes_inicio()) })
-    corte_fin_p     <- reactive({ req(panel_p());  panel_p()  %>% filter(ym == ultimo_mes()) })
-    corte_ini_np    <- reactive({ req(panel_np()); panel_np() %>% filter(ym == mes_inicio()) })
-    corte_fin_np    <- reactive({ req(panel_np()); panel_np() %>% filter(ym == ultimo_mes()) })
-    
-    corte_ini_altas <- reactive({
-      req(panel_altas())
-      panel_altas() %>%
-        filter(presupuestada == "NO PRESUPUESTADA", ym == mes_inicio())
-    })
-    corte_fin_altas <- reactive({
-      req(panel_altas())
-      panel_altas() %>%
-        filter(presupuestada == "NO PRESUPUESTADA", ym == ultimo_mes())
-    })
-    
-    output$lbl_inicio_p  <- renderUI({ strong(paste("Inicio —", format(mes_inicio(), "%b %Y"))) })
-    output$lbl_fin_p     <- renderUI({ strong(paste("Fin —",    format(ultimo_mes(), "%b %Y"))) })
-    output$lbl_inicio_np <- renderUI({ strong(paste("Inicio —", format(mes_inicio(), "%b %Y"))) })
-    output$lbl_fin_np    <- renderUI({ strong(paste("Fin —",    format(ultimo_mes(), "%b %Y"))) })
-    
-    .lbl_transicion <- function() {
-      renderUI({
-        p(icon("info-circle"),
-          paste0(" Periodo: ", format(mes_inicio(), "%B %Y"),
-                 " → ", format(ultimo_mes(), "%B %Y"),
-                 "  |  Transiciones t → t+1 · Poblacion Base"),
-          style = "font-size:11px; color:#666; margin-bottom:8px;")
-      })
-    }
-    output$lbl_transicion_p  <- .lbl_transicion()
-    output$lbl_transicion_np <- .lbl_transicion()
-    
-    # ==========================================================================
-    # KPIs — PRESUPUESTADOS inicio/fin
-    # Con boton: tabla filtrada declarada estaticamente antes del CajaModal
-    # ==========================================================================
-    
-    # Tablas para modales de presupuestados inicio/fin
-    output$tbl_p_activo_ini <- reactable::renderReactable({
-      req(corte_ult())
-      .reactable_uc(
-        corte_ult() %>% filter(presupuestada == "PRESUPUESTADA", estado == "CLIENTE ACTIVO"),
-        ns("click_p_activo_ini")
-      )
-    })
-    output$tbl_p_recuperar_ini <- reactable::renderReactable({
-      req(corte_ult())
-      .reactable_uc(
-        corte_ult() %>% filter(presupuestada == "PRESUPUESTADA", estado == "CLIENTE A RECUPERAR"),
-        ns("click_p_recuperar_ini")
-      )
-    })
-    output$tbl_p_activo_fin <- reactable::renderReactable({
-      req(corte_ult())
-      .reactable_uc(
-        corte_ult() %>% filter(presupuestada == "PRESUPUESTADA", estado == "CLIENTE ACTIVO"),
-        ns("click_p_activo_fin")
-      )
-    })
-    output$tbl_p_recuperar_fin <- reactable::renderReactable({
-      req(corte_ult())
-      .reactable_uc(
-        corte_ult() %>% filter(presupuestada == "PRESUPUESTADA", estado == "CLIENTE A RECUPERAR"),
-        ns("click_p_recuperar_fin")
-      )
-    })
-    
-    .bind_cumpl_modal("click_p_activo_ini",    "cumpl_p_activo_ini")
-    .bind_cumpl_modal("click_p_recuperar_ini", "cumpl_p_recuperar_ini")
-    .bind_cumpl_modal("click_p_activo_fin",    "cumpl_p_activo_fin")
-    .bind_cumpl_modal("click_p_recuperar_fin", "cumpl_p_recuperar_fin")
-    
-    CajaModal(
-      id            = "kpi_p_activo_ini",
-      valor         = reactive(corte_ini_p() %>% filter(estado == "CLIENTE ACTIVO") %>% .n_uc()),
-      formato       = "numero",
-      texto         = "Clientes Activos",
-      icono         = "check-circle",
-      mostrar_boton = TRUE,
-      titulo_modal  = reactive(
-        paste0("Presupuestados Activos — Inicio (", format(mes_inicio(), "%b %Y"), ")")
-      ),
-      tamano_modal  = "xl",
-      contenido_modal = function() {
-        tagList(
-          reactable::reactableOutput(ns("tbl_p_activo_ini")),
-          uiOutput(ns("cumpl_p_activo_ini"))
-        )
-      }
-    )
-    
-    CajaModal(
-      id            = "kpi_p_recuperar_ini",
-      valor         = reactive(
-        corte_ini_p() %>% filter(estado == "CLIENTE A RECUPERAR") %>% .n_uc()
-      ),
-      formato       = "numero",
-      texto         = "Clientes a Recuperar",
-      icono         = "exclamation-triangle",
-      mostrar_boton = TRUE,
-      titulo_modal  = reactive(
-        paste0("Presupuestados a Recuperar — Inicio (", format(mes_inicio(), "%b %Y"), ")")
-      ),
-      tamano_modal  = "xl",
-      contenido_modal = function() {
-        tagList(
-          reactable::reactableOutput(ns("tbl_p_recuperar_ini")),
-          uiOutput(ns("cumpl_p_recuperar_ini"))
-        )
-      }
-    )
-    
-    CajaModal(
-      id            = "kpi_p_tasa_fact_ini",
-      valor         = reactive(
-        html_valor(tasa_fact_p() %||% 0,
-                   formato = "porcentaje",
-                   color   = .color_kpi(tasa_fact_p(), "tasa"))
-      ),
-      texto         = "Tasa Facturacion Promedio",
-      icono         = "calendar-check",
-      mostrar_boton = FALSE
-    )
-    
-    CajaModal(
-      id            = "kpi_p_activo_fin",
-      valor         = reactive(corte_fin_p() %>% filter(estado == "CLIENTE ACTIVO") %>% .n_uc()),
-      formato       = "numero",
-      texto         = "Clientes Activos",
-      icono         = "check-circle",
-      mostrar_boton = TRUE,
-      titulo_modal  = reactive(
-        paste0("Presupuestados Activos — Fin (", format(ultimo_mes(), "%b %Y"), ")")
-      ),
-      tamano_modal  = "xl",
-      contenido_modal = function() {
-        tagList(
-          reactable::reactableOutput(ns("tbl_p_activo_fin")),
-          uiOutput(ns("cumpl_p_activo_fin"))
-        )
-      }
-    )
-    
-    CajaModal(
-      id            = "kpi_p_recuperar_fin",
-      valor         = reactive(
-        corte_fin_p() %>% filter(estado == "CLIENTE A RECUPERAR") %>% .n_uc()
-      ),
-      formato       = "numero",
-      texto         = "Clientes a Recuperar",
-      icono         = "exclamation-triangle",
-      mostrar_boton = TRUE,
-      titulo_modal  = reactive(
-        paste0("Presupuestados a Recuperar — Fin (", format(ultimo_mes(), "%b %Y"), ")")
-      ),
-      tamano_modal  = "xl",
-      contenido_modal = function() {
-        tagList(
-          reactable::reactableOutput(ns("tbl_p_recuperar_fin")),
-          uiOutput(ns("cumpl_p_recuperar_fin"))
-        )
-      }
-    )
-    
-    CajaModal(
-      id            = "kpi_p_tasa_fact_fin",
-      valor         = reactive(
-        html_valor(tasa_fact_p() %||% 0,
-                   formato = "porcentaje",
-                   color   = .color_kpi(tasa_fact_p(), "tasa"))
-      ),
-      texto         = "Tasa Facturacion Promedio",
-      icono         = "calendar-check",
-      mostrar_boton = FALSE
-    )
-    
-    # KPIs dinamicos presupuestados — sin boton
-    CajaModal(
-      id            = "kpi_p_retencion",
-      valor         = reactive(
-        html_valor(ind_p()$retencion %||% 0,
-                   formato = "porcentaje",
-                   color   = .color_kpi(ind_p()$retencion, "retencion"))
-      ),
-      texto         = "Retencion",
-      icono         = "check-double",
-      mostrar_boton = FALSE
-    )
-    CajaModal(
-      id            = "kpi_p_perdida",
-      valor         = reactive(
-        html_valor(ind_p()$perdida %||% 0,
-                   formato = "porcentaje",
-                   color   = .color_kpi(ind_p()$perdida, "perdida"))
-      ),
-      texto         = "Perdida Dinamica",
-      icono         = "arrow-down",
-      mostrar_boton = FALSE
-    )
-    CajaModal(
-      id            = "kpi_p_reactivacion",
-      valor         = reactive(
-        html_valor(ind_p()$reactivacion %||% 0,
-                   formato = "porcentaje",
-                   color   = .color_kpi(ind_p()$reactivacion, "reactivacion"))
-      ),
-      texto         = "Reactivacion",
-      icono         = "sync-alt",
-      mostrar_boton = FALSE
-    )
-    
-    # ==========================================================================
-    # KPIs — NO PRESUPUESTADOS inicio/fin
-    # ==========================================================================
-    
-    # Tablas para modales de no presupuestados inicio/fin
-    output$tbl_np_activo_ini <- reactable::renderReactable({
-      req(corte_ult())
-      .reactable_uc(
-        corte_ult() %>% filter(presupuestada == "NO PRESUPUESTADA", estado == "CLIENTE ACTIVO"),
-        ns("click_np_activo_ini")
-      )
-    })
-    output$tbl_np_recuperar_ini <- reactable::renderReactable({
-      req(corte_ult())
-      .reactable_uc(
-        corte_ult() %>% filter(
-          presupuestada == "NO PRESUPUESTADA", estado == "CLIENTE A RECUPERAR"
-        ),
-        ns("click_np_recuperar_ini")
-      )
-    })
-    output$tbl_np_nuevos_ini <- reactable::renderReactable({
-      req(corte_ult())
-      .reactable_uc(
-        corte_ult() %>% filter(presupuestada == "NO PRESUPUESTADA",
-                               tipo_cohorte  == "ALTA EN COHORTE"),
-        ns("click_np_nuevos_ini")
-      )
-    })
-    output$tbl_np_activo_fin <- reactable::renderReactable({
-      req(corte_ult())
-      .reactable_uc(
-        corte_ult() %>% filter(presupuestada == "NO PRESUPUESTADA", estado == "CLIENTE ACTIVO"),
-        ns("click_np_activo_fin")
-      )
-    })
-    output$tbl_np_recuperar_fin <- reactable::renderReactable({
-      req(corte_ult())
-      .reactable_uc(
-        corte_ult() %>% filter(
-          presupuestada == "NO PRESUPUESTADA", estado == "CLIENTE A RECUPERAR"
-        ),
-        ns("click_np_recuperar_fin")
-      )
-    })
-    output$tbl_np_nuevos_fin <- reactable::renderReactable({
-      req(corte_ult())
-      .reactable_uc(
-        corte_ult() %>% filter(presupuestada == "NO PRESUPUESTADA",
-                               tipo_cohorte  == "ALTA EN COHORTE"),
-        ns("click_np_nuevos_fin")
-      )
-    })
-    
-    .bind_cumpl_modal("click_np_activo_ini",    "cumpl_np_activo_ini")
-    .bind_cumpl_modal("click_np_recuperar_ini", "cumpl_np_recuperar_ini")
-    .bind_cumpl_modal("click_np_nuevos_ini",    "cumpl_np_nuevos_ini")
-    .bind_cumpl_modal("click_np_activo_fin",    "cumpl_np_activo_fin")
-    .bind_cumpl_modal("click_np_recuperar_fin", "cumpl_np_recuperar_fin")
-    .bind_cumpl_modal("click_np_nuevos_fin",    "cumpl_np_nuevos_fin")
-    
-    CajaModal(
-      id            = "kpi_np_activo_ini",
-      valor         = reactive(corte_ini_np() %>% filter(estado == "CLIENTE ACTIVO") %>% .n_uc()),
-      formato       = "numero",
-      texto         = "Clientes Activos",
-      icono         = "check-circle",
-      mostrar_boton = TRUE,
-      titulo_modal  = reactive(
-        paste0("No Presupuestados Activos — Inicio (", format(mes_inicio(), "%b %Y"), ")")
-      ),
-      tamano_modal  = "xl",
-      contenido_modal = function() {
-        tagList(
-          reactable::reactableOutput(ns("tbl_np_activo_ini")),
-          uiOutput(ns("cumpl_np_activo_ini"))
-        )
-      }
-    )
-    
-    CajaModal(
-      id            = "kpi_np_recuperar_ini",
-      valor         = reactive(
-        corte_ini_np() %>% filter(estado == "CLIENTE A RECUPERAR") %>% .n_uc()
-      ),
-      formato       = "numero",
-      texto         = "Clientes a Recuperar",
-      icono         = "exclamation-triangle",
-      mostrar_boton = TRUE,
-      titulo_modal  = reactive(
-        paste0("No Presupuestados a Recuperar — Inicio (", format(mes_inicio(), "%b %Y"), ")")
-      ),
-      tamano_modal  = "xl",
-      contenido_modal = function() {
-        tagList(
-          reactable::reactableOutput(ns("tbl_np_recuperar_ini")),
-          uiOutput(ns("cumpl_np_recuperar_ini"))
-        )
-      }
-    )
-    
-    CajaModal(
-      id            = "kpi_np_nuevos_ini",
-      valor         = reactive(corte_ini_altas() %>% .n_uc()),
-      formato       = "numero",
-      texto         = "Altas en Cohorte",
-      icono         = "user-plus",
-      mostrar_boton = TRUE,
-      titulo_modal  = reactive(
-        paste0("Altas en Cohorte — Inicio (", format(mes_inicio(), "%b %Y"), ")")
-      ),
-      tamano_modal  = "xl",
-      contenido_modal = function() {
-        tagList(
-          reactable::reactableOutput(ns("tbl_np_nuevos_ini")),
-          uiOutput(ns("cumpl_np_nuevos_ini"))
-        )
-      }
-    )
-    
-    CajaModal(
-      id            = "kpi_np_tasa_fact",
-      valor         = reactive(
-        html_valor(tasa_fact_np() %||% 0,
-                   formato = "porcentaje",
-                   color   = .color_kpi(tasa_fact_np(), "tasa"))
-      ),
-      texto         = "Tasa Facturacion Promedio",
-      icono         = "calendar-check",
-      mostrar_boton = FALSE
-    )
-    
-    CajaModal(
-      id            = "kpi_np_activo_fin",
-      valor         = reactive(corte_fin_np() %>% filter(estado == "CLIENTE ACTIVO") %>% .n_uc()),
-      formato       = "numero",
-      texto         = "Clientes Activos",
-      icono         = "check-circle",
-      mostrar_boton = TRUE,
-      titulo_modal  = reactive(
-        paste0("No Presupuestados Activos — Fin (", format(ultimo_mes(), "%b %Y"), ")")
-      ),
-      tamano_modal  = "xl",
-      contenido_modal = function() {
-        tagList(
-          reactable::reactableOutput(ns("tbl_np_activo_fin")),
-          uiOutput(ns("cumpl_np_activo_fin"))
-        )
-      }
-    )
-    
-    CajaModal(
-      id            = "kpi_np_recuperar_fin",
-      valor         = reactive(
-        corte_fin_np() %>% filter(estado == "CLIENTE A RECUPERAR") %>% .n_uc()
-      ),
-      formato       = "numero",
-      texto         = "Clientes a Recuperar",
-      icono         = "exclamation-triangle",
-      mostrar_boton = TRUE,
-      titulo_modal  = reactive(
-        paste0("No Presupuestados a Recuperar — Fin (", format(ultimo_mes(), "%b %Y"), ")")
-      ),
-      tamano_modal  = "xl",
-      contenido_modal = function() {
-        tagList(
-          reactable::reactableOutput(ns("tbl_np_recuperar_fin")),
-          uiOutput(ns("cumpl_np_recuperar_fin"))
-        )
-      }
-    )
-    
-    CajaModal(
-      id            = "kpi_np_nuevos_fin",
-      valor         = reactive(corte_fin_altas() %>% .n_uc()),
-      formato       = "numero",
-      texto         = "Altas en Cohorte",
-      icono         = "user-plus",
-      mostrar_boton = TRUE,
-      titulo_modal  = reactive(
-        paste0("Altas en Cohorte — Fin (", format(ultimo_mes(), "%b %Y"), ")")
-      ),
-      tamano_modal  = "xl",
-      contenido_modal = function() {
-        tagList(
-          reactable::reactableOutput(ns("tbl_np_nuevos_fin")),
-          uiOutput(ns("cumpl_np_nuevos_fin"))
-        )
-      }
-    )
-    
-    CajaModal(
-      id            = "kpi_np_tasa_fact_fin",
-      valor         = reactive(
-        html_valor(tasa_fact_np() %||% 0,
-                   formato = "porcentaje",
-                   color   = .color_kpi(tasa_fact_np(), "tasa"))
-      ),
-      texto         = "Tasa Facturacion Promedio",
-      icono         = "calendar-check",
-      mostrar_boton = FALSE
-    )
-    
-    # KPIs dinamicos no presupuestados — sin boton
-    CajaModal(
-      id            = "kpi_np_retencion",
-      valor         = reactive(
-        html_valor(ind_np()$retencion %||% 0,
-                   formato = "porcentaje",
-                   color   = .color_kpi(ind_np()$retencion, "retencion"))
-      ),
-      texto         = "Retencion",
-      icono         = "check-double",
-      mostrar_boton = FALSE
-    )
-    CajaModal(
-      id            = "kpi_np_perdida",
-      valor         = reactive(
-        html_valor(ind_np()$perdida %||% 0,
-                   formato = "porcentaje",
-                   color   = .color_kpi(ind_np()$perdida, "perdida"))
-      ),
-      texto         = "Perdida Dinamica",
-      icono         = "arrow-down",
-      mostrar_boton = FALSE
-    )
-    CajaModal(
-      id            = "kpi_np_reactivacion",
-      valor         = reactive(
-        html_valor(ind_np()$reactivacion %||% 0,
-                   formato = "porcentaje",
-                   color   = .color_kpi(ind_np()$reactivacion, "reactivacion"))
-      ),
-      texto         = "Reactivacion",
-      icono         = "sync-alt",
-      mostrar_boton = FALSE
-    )
-    
-    # ==========================================================================
-    # GRAFICOS — EVOLUCION
-    # ==========================================================================
-    
-    .graf_evolucion <- function(panel) {
-      df <- panel %>%
-        group_by(ym, estado) %>%
-        summarise(n = n_distinct(cliente_id), .groups = "drop") %>%
-        mutate(estado = factor(estado, levels = names(.ESTADOS)))
-      
-      plot_ly(
-        df, x = ~ym, y = ~n, color = ~estado, colors = .ESTADOS,
-        type = "scatter", mode = "lines+markers",
-        line   = list(width = 2),
-        marker = list(size = 6),
-        hovertemplate = ~paste0(
-          "<b>", estado, "</b><br>",
-          format(ym, "%B %Y"), "<br>",
-          "Unidades Comerciales: <b>", n, "</b>",
-          "<extra></extra>"
-        )
-      ) %>%
-        layout(
-          xaxis      = list(title = "", type = "date", tickformat = "%b %Y", dtick = "M1"),
-          yaxis      = list(title = "Unidades Comerciales"),
-          legend     = list(orientation = "h", y = -0.25),
-          hovermode  = "x unified",
-          hoverlabel = list(
-            bgcolor    = "rgba(255,255,255,1)", bordercolor = "#cccccc",
-            font       = list(size = 12, color = "#000000"),
-            align      = "left", namelength = -1
-          )
-        )
-    }
-    
-    output$graf_p_evolucion  <- renderPlotly({ req(panel_p());  .graf_evolucion(panel_p())  })
-    output$graf_np_evolucion <- renderPlotly({ req(panel_np()); .graf_evolucion(panel_np()) })
-    
-    # ==========================================================================
-    # GRAFICOS — PERMANENCIA
-    # ==========================================================================
-    
-    .graf_permanencia <- function(panel) {
-      df_hist   <- panel %>%
-        group_by(cliente_id) %>%
-        summarise(meses_activo = sum(estado == "CLIENTE ACTIVO"), .groups = "drop")
-      total_ucs <- nrow(df_hist)
-      freq      <- df_hist %>%
-        count(meses_activo, name = "n_ucs") %>%
-        mutate(pct = round(100 * n_ucs / total_ucs, 1))
-      
-      plot_ly(
-        x    = freq$meses_activo,
-        y    = freq$n_ucs,
-        type = "bar",
-        marker        = list(color = "#2C7BB6", line = list(color = "white", width = 1)),
-        customdata    = freq$pct,
-        hovertemplate = paste0(
-          "<b>%{x} mes(es) como Cliente Activo</b><br>",
-          "Unidades Comerciales: <b>%{y}</b><br>",
-          "Participacion en el grupo: <b>%{customdata}%</b>",
-          "<extra></extra>"
-        )
-      ) %>%
-        layout(
-          xaxis      = list(
-            title    = "Meses como Cliente Activo en el periodo",
-            dtick    = 1, tickmode = "linear"
-          ),
-          yaxis      = list(title = "Unidades Comerciales"),
-          bargap     = 0.15,
-          hoverlabel = list(
-            bgcolor     = "rgba(255,255,255,1)", bordercolor = "#2C7BB6",
-            font        = list(size = 12, color = "#000000"),
-            align       = "left"
-          )
-        )
-    }
-    
-    output$graf_p_permanencia  <- renderPlotly({ req(panel_p());  .graf_permanencia(panel_p())  })
-    output$graf_np_permanencia <- renderPlotly({ req(panel_np()); .graf_permanencia(panel_np()) })
-    
-    # ==========================================================================
-    # TABLA RESUMEN MENSUAL
-    # ==========================================================================
-    
-    .tabla_resumen_reactable <- function(panel, input_id_click) {
-      meses        <- meses_periodo()
-      col_keys_ord <- format(meses, "%Y-%m")
-      col_labels   <- format(meses, "%b %y")
-      
-      conteos <- panel %>%
-        group_by(estado, ym) %>%
-        summarise(n = n_distinct(cliente_id), .groups = "drop") %>%
-        mutate(col_key = format(ym, "%Y-%m")) %>%
-        pivot_wider(
-          id_cols    = estado,
-          names_from = col_key,
-          values_from = n, values_fill = 0L
-        ) %>%
-        mutate(estado = factor(
-          estado,
-          levels = names(.ESTADOS)[names(.ESTADOS) %in% unique(panel$estado)]
-        )) %>%
-        arrange(estado) %>%
-        mutate(estado = as.character(estado))
-      
-      cols_presentes <- intersect(col_keys_ord, names(conteos))
-      
-      fila_total <- conteos %>%
-        summarise(across(all_of(cols_presentes), ~ sum(.x, na.rm = TRUE))) %>%
-        mutate(estado = "Total poblacion", .before = 1)
-      
-      df <- bind_rows(conteos, fila_total)
-      
-      max_val <- max(unlist(conteos[, cols_presentes, drop = FALSE]), na.rm = TRUE)
-      max_val <- if (is.finite(max_val) && max_val > 0) max_val else 1
-      
-      pal_fn <- scales::col_numeric(
-        palette = c("#F0F6FF", "#B8D4F0", "#7BAFD4"),
-        domain  = c(0, max_val)
-      )
-      
-      js_onclick <- paste0(
-        "function(rowInfo, colInfo) {",
-        "  var col = colInfo.id;",
-        "  if (!/^\\d{4}-\\d{2}$/.test(col)) return;",
-        "  if (rowInfo.values['estado'] === 'Total poblacion') return;",
-        "  Shiny.setInputValue('", input_id_click, "', {",
-        "    estado: rowInfo.values['estado'],",
-        "    ym: col,",
-        "    nonce: Math.random()",
-        "  }, {priority: 'event'});",
-        "}"
-      )
-      
-      cols_meses <- setNames(
-        lapply(seq_along(col_keys_ord), function(i) {
-          local({
-            lbl_local <- col_labels[[i]]
-            n_estados <- nrow(conteos)
-            reactable::colDef(
-              name     = lbl_local,
-              minWidth = 72,
-              style    = function(value, index) {
-                es_total <- index > n_estados
-                if (es_total) {
-                  return(list(background = "#EEF2FF", fontWeight = "700", color = "#1a1a1a"))
-                }
-                bg <- if (is.na(value) || value == 0) "#F8F9FA"
-                else pal_fn(min(value, max_val))
-                list(background = bg, cursor = "pointer",
-                     fontWeight = "500", color = "#1a1a1a")
-              }
-            )
-          })
-        }),
-        col_keys_ord
-      )
-      
-      col_estado <- list(
-        estado = reactable::colDef(
-          name     = "Estado en Cohorte",
-          minWidth = 170,
-          style    = function(value) {
-            if (value == "Total poblacion") {
-              return(list(fontWeight = "700", color = "#333", background = "#EEF2FF"))
-            }
-            list(
-              fontWeight = "600",
-              color = if (!is.null(.ESTADOS[value]) && !is.na(.ESTADOS[value]))
-                .ESTADOS[value] else "#333"
-            )
-          }
-        )
-      )
-      
-      reactable::reactable(
-        data      = df,
-        columns   = c(col_estado, cols_meses),
-        onClick   = JS(js_onclick),
-        bordered  = TRUE,
-        compact   = TRUE,
-        highlight = TRUE,
-        sortable  = FALSE,
-        theme     = reactable::reactableTheme(
-          headerStyle = list(fontWeight = "600", fontSize = "12px"),
-          cellStyle   = list(fontSize = "12px")
-        )
-      )
-    }
-    
-    output$tabla_p_resumen  <- reactable::renderReactable({
-      req(panel_p())
-      .tabla_resumen_reactable(panel_p(),  ns("resumen_click_p"))
-    })
-    output$tabla_np_resumen <- reactable::renderReactable({
-      req(panel_np())
-      .tabla_resumen_reactable(panel_np(), ns("resumen_click_np"))
-    })
-    
-    # Click en celda de tabla resumen → modal dinamico con .show_modal
-    .obs_resumen_click <- function(input_id_click, panel_fn, grupo_label) {
-      observeEvent(input[[input_id_click]], {
-        click <- input[[input_id_click]]
-        req(!is.null(click$estado), !is.null(click$ym))
-        ym_sel     <- as.Date(paste0(click$ym, "-01"))
-        ids_sel    <- panel_fn() %>%
-          filter(ym == ym_sel, estado == click$estado) %>%
-          distinct(cliente_id) %>%
-          pull()
-        data_modal <- corte_ult() %>% filter(cliente_id %in% ids_sel)
-        titulo     <- paste0(grupo_label, " — ", click$estado,
-                             " · ", format(ym_sel, "%b %Y"),
-                             " (", nrow(data_modal), " UCs)")
-        modal_id   <- paste0(
-          "res_",
-          gsub("[^A-Za-z0-9]", "_", paste(grupo_label, click$estado, click$ym))
-        )
-        .show_modal(titulo, "table", data_modal, modal_id)
-      }, ignoreNULL = TRUE)
-    }
-    
-    .obs_resumen_click("resumen_click_p",  panel_p,  "Presupuestados")
-    .obs_resumen_click("resumen_click_np", panel_np, "No Presupuestados")
-    
-    # ==========================================================================
-    # TABLA RANGOS DE TASA DE FACTURACION
-    # ==========================================================================
-    
-    .RANGOS_BREAKS <- c(0, 10, 30, 60, 80, 100)
-    .RANGOS_LABELS <- c("0% - 10%", "10% - 30%", "30% - 60%", "60% - 80%", "80% - 100%")
-    
-    .rango_tasa <- function(pct) {
-      as.character(cut(pct,
-                       breaks = .RANGOS_BREAKS, labels = .RANGOS_LABELS,
-                       include.lowest = TRUE, right = TRUE
-      ))
-    }
-    
-    .tabla_rangos_reactable <- function(df_rangos, click_id_ns) {
-      js_click <- paste0(
-        "function(rowInfo) {",
-        "  Shiny.setInputValue('", click_id_ns, "', {",
-        "    rango: rowInfo.values['rango'],",
-        "    nonce: Math.random()",
-        "  }, {priority: 'event'});",
-        "}"
-      )
-      reactable::reactable(
-        data            = df_rangos,
-        onClick         = JS(js_click),
-        highlight       = TRUE,
-        bordered        = TRUE,
-        compact         = TRUE,
-        defaultPageSize = 6,
-        columns = list(
-          rango            = reactable::colDef(name = "Rango Tasa Facturacion", minWidth = 180),
-          n_ucs            = reactable::colDef(name = "UCs",         minWidth = 80,
-                                               cell = function(v) format(v, big.mark = ",")),
-          pct_ucs          = reactable::colDef(name = "% Grupo",     minWidth = 80,
-                                               cell = function(v) paste0(v, "%")),
-          sacos_total      = reactable::colDef(name = "Sacos",       minWidth = 100,
-                                               cell = function(v) .fmt_num(v)),
-          margen_total     = reactable::colDef(name = "Margen",      minWidth = 110,
-                                               cell = function(v) .fmt_num(v)),
-          ppto_sacos       = reactable::colDef(
-            name = "Ppto Sacos",  minWidth = 100,
-            cell = function(v) if (is.na(v)) "\u2014" else .fmt_num(v)
-          ),
-          ppto_margen      = reactable::colDef(
-            name = "Ppto Margen", minWidth = 110,
-            cell = function(v) if (is.na(v)) "\u2014" else .fmt_num(v)
-          ),
-          cumpl_sacos_pct  = reactable::colDef(
-            name  = "% Sacos",  minWidth = 80,
-            cell  = function(v) .fmt_pct(v),
-            style = function(v) list(background = .color_cumpl_bg(v))
-          ),
-          cumpl_margen_pct = reactable::colDef(
-            name  = "% Margen", minWidth = 80,
-            cell  = function(v) .fmt_pct(v),
-            style = function(v) list(background = .color_cumpl_bg(v))
-          )
-        ),
-        theme = reactable::reactableTheme(
-          headerStyle = list(fontWeight = "600", fontSize = "12px"),
-          cellStyle   = list(fontSize = "12px", cursor = "pointer")
-        )
-      )
-    }
-    
-    .build_rangos_df <- function(panel) {
-      ids <- panel %>% distinct(cliente_id) %>% pull()
-      n_m <- n_meses()
-      
-      tasa_ids <- tasa_fact_uc() %>%
-        filter(cliente_id %in% ids) %>%
-        mutate(rango = .rango_tasa(tasa_fact_pct))
-      
-      real_ids <- real_acum() %>% filter(cliente_id %in% ids)
-      
-      ppto_indiv <- marca_presupuesto() %>%
-        filter(presupuestada == "PRESUPUESTADA", cliente_id %in% ids) %>%
-        transmute(
-          cliente_id,
-          ppto_sacos_uc  = ppto_sacos_anual  / 12 * n_m,
-          ppto_margen_uc = ppto_margen_anual / 12 * n_m
-        )
-      
-      ppto_grupal_uc <- panel_cumpl_grupal() %>%
-        filter(cliente_id %in% ids) %>%
-        group_by(cliente_id) %>%
-        summarise(
-          ppto_sacos_uc  = sum(ppto_sacos_mes,  na.rm = TRUE),
-          ppto_margen_uc = sum(ppto_margen_mes, na.rm = TRUE),
-          .groups = "drop"
-        )
-      
-      ppto_all <- bind_rows(ppto_indiv, ppto_grupal_uc) %>%
-        group_by(cliente_id) %>%
-        summarise(
-          ppto_sacos_uc  = sum(ppto_sacos_uc,  na.rm = TRUE),
-          ppto_margen_uc = sum(ppto_margen_uc, na.rm = TRUE),
-          .groups = "drop"
-        )
-      
-      tasa_ids %>%
-        left_join(real_ids, by = "cliente_id") %>%
-        left_join(ppto_all, by = "cliente_id") %>%
-        mutate(
-          sacos_total  = replace_na(sacos_total,  0),
-          margen_total = replace_na(margen_total, 0)
-        ) %>%
-        group_by(rango) %>%
-        summarise(
-          n_ucs        = n(),
-          sacos_total  = sum(sacos_total,  na.rm = TRUE),
-          margen_total = sum(margen_total, na.rm = TRUE),
-          ppto_sacos   = if (any(!is.na(ppto_sacos_uc)))
-            sum(ppto_sacos_uc,  na.rm = TRUE) else NA_real_,
-          ppto_margen  = if (any(!is.na(ppto_margen_uc)))
-            sum(ppto_margen_uc, na.rm = TRUE) else NA_real_,
-          .groups = "drop"
-        ) %>%
-        right_join(tibble(rango = .RANGOS_LABELS), by = "rango") %>%
-        mutate(
-          rango        = factor(rango, levels = .RANGOS_LABELS),
-          n_ucs        = replace_na(n_ucs, 0L),
-          sacos_total  = replace_na(sacos_total, 0),
-          margen_total = replace_na(margen_total, 0),
-          pct_ucs      = round(n_ucs / pmax(sum(n_ucs), 1) * 100, 1),
-          cumpl_sacos_pct  = if_else(
-            !is.na(ppto_sacos)  & ppto_sacos  > 0,
-            round(sacos_total  / ppto_sacos  * 100, 1), NA_real_
-          ),
-          cumpl_margen_pct = if_else(
-            !is.na(ppto_margen) & ppto_margen > 0,
-            round(margen_total / ppto_margen * 100, 1), NA_real_
-          )
-        ) %>%
-        arrange(rango) %>%
-        mutate(rango = as.character(rango)) %>%
-        select(rango, n_ucs, pct_ucs, sacos_total, margen_total,
-               ppto_sacos, ppto_margen, cumpl_sacos_pct, cumpl_margen_pct)
-    }
-    
-    output$tabla_p_rangos_fact  <- reactable::renderReactable({
-      req(tasa_fact_uc(), panel_p(), real_acum())
-      .tabla_rangos_reactable(.build_rangos_df(panel_p()), ns("click_rangos_p"))
-    })
-    output$tabla_np_rangos_fact <- reactable::renderReactable({
-      req(tasa_fact_uc(), panel_np(), real_acum())
-      .tabla_rangos_reactable(.build_rangos_df(panel_np()), ns("click_rangos_np"))
-    })
-    
-    # Click en rango de tasa → modal dinamico con .show_modal
-    .show_modal_rango <- function(click_input, panel_fn, grupo_label) {
-      observeEvent(input[[click_input]], {
-        req(!is.null(input[[click_input]]$rango))
-        rango_sel  <- input[[click_input]]$rango
-        ids_rango  <- tasa_fact_uc() %>%
-          filter(
-            cliente_id %in% (panel_fn() %>% distinct(cliente_id) %>% pull()),
-            .rango_tasa(tasa_fact_pct) == rango_sel
-          ) %>%
-          pull(cliente_id)
-        data_modal <- corte_ult() %>% filter(cliente_id %in% ids_rango)
-        modal_id   <- paste0(
-          "rango_",
-          gsub("[^A-Za-z0-9]", "_", paste(grupo_label, rango_sel))
-        )
-        .show_modal(paste0(grupo_label, " — Tasa ", rango_sel),
-                    "percentage", data_modal, modal_id)
-      }, ignoreNULL = TRUE, ignoreInit = TRUE)
-    }
-    
-    .show_modal_rango("click_rangos_p",  panel_p,  "Presupuestados")
-    .show_modal_rango("click_rangos_np", panel_np, "No Presupuestados")
-    
-    # ==========================================================================
-    # MATRIZ DE TRANSICION
-    # ==========================================================================
-    
-    .tabla_transicion_gt <- function(panel, lbl_ini, lbl_fin) {
-      estados_ord <- c("CLIENTE ACTIVO", "CLIENTE A RECUPERAR", "NUEVO DEL PERIODO")
-      estados_ord <- estados_ord[estados_ord %in% unique(panel$estado)]
-      
-      trans_raw <- panel %>%
-        arrange(cliente_id, ym) %>%
-        group_by(cliente_id) %>%
-        mutate(estado_sig = lead(estado)) %>%
-        ungroup() %>%
-        filter(!is.na(estado_sig))
-      
-      mat <- trans_raw %>%
-        count(estado, estado_sig, name = "n") %>%
-        complete(estado = estados_ord, estado_sig = estados_ord, fill = list(n = 0L))
-      
-      tot_fila <- mat %>%
-        group_by(estado) %>%
-        summarise(n_total_fila = sum(n), .groups = "drop")
-      
-      mat_pct <- mat %>%
-        left_join(tot_fila, by = "estado") %>%
-        mutate(
-          pct   = if_else(n_total_fila > 0, round(100 * n / n_total_fila, 1), NA_real_),
-          celda = paste0(n, " (", ifelse(is.na(pct), "\u2014", paste0(pct, "%")), ")")
-        )
-      
-      wide <- mat_pct %>%
-        select(estado, estado_sig, celda) %>%
-        pivot_wider(names_from = estado_sig, values_from = celda, values_fill = "\u2014") %>%
-        left_join(tot_fila %>% rename(`Total fila` = n_total_fila), by = "estado") %>%
-        mutate(estado = factor(estado, levels = estados_ord)) %>%
-        arrange(estado) %>%
-        mutate(estado = as.character(estado))
-      
-      tot_col_vals <- mat %>%
-        group_by(estado_sig) %>%
-        summarise(n_total = sum(n), .groups = "drop")
-      
-      tot_col_wide  <- tot_col_vals %>%
-        pivot_wider(names_from = estado_sig, values_from = n_total)
-      gran_total    <- sum(unlist(tot_col_wide), na.rm = TRUE)
-      
-      fila_tot <- tibble(estado = "Total columna", `Total fila` = as.character(gran_total))
-      for (est in estados_ord) {
-        val           <- if (est %in% names(tot_col_wide)) tot_col_wide[[est]] else 0L
-        fila_tot[[est]] <- as.character(replace_na(val, 0L))
-      }
-      fila_tot <- fila_tot %>% select(all_of(names(wide)))
-      
-      wide     <- wide %>% mutate(`Total fila` = as.character(`Total fila`))
-      df_final <- bind_rows(wide, fila_tot)
-      
-      cols_estado  <- estados_ord[estados_ord %in% names(df_final)]
-      n_ucs_panel  <- n_distinct(panel$cliente_id)
-      n_meses_real <- n_distinct(panel$ym)
-      nota_pie     <- paste0(
-        "Transiciones registradas: ", gran_total, " = ",
-        n_ucs_panel, " UCs x ", n_meses_real - 1L, " transiciones posibles.",
-        " El total por fila representa cuantas veces una UC estuvo en ese estado",
-        " entre t y t+1 a lo largo del periodo."
-      )
-      
-      df_final %>%
-        gt(rowname_col = "estado") %>%
-        tab_header(
-          title    = "Matriz de Transicion de Estado",
-          subtitle = paste0("Periodo: ", lbl_ini, " → ", lbl_fin,
-                            "  |  Toda la poblacion del panel")
-        ) %>%
-        tab_spanner(label = "→ Estado t+1", columns = all_of(cols_estado)) %>%
-        tab_source_note(source_note = nota_pie) %>%
-        tab_style(cell_text(weight = "bold"), cells_stub()) %>%
-        tab_style(cell_text(weight = "bold"), cells_column_labels()) %>%
-        tab_style(
-          style     = list(cell_fill(color = "#EEF2FF"), cell_text(weight = "bold")),
-          locations = cells_body(columns = `Total fila`)
-        ) %>%
-        tab_style(
-          style     = list(cell_fill(color = "#EEF2FF"), cell_text(weight = "bold")),
-          locations = cells_body(rows = estado == "Total columna")
-        ) %>%
-        tab_style(
-          style     = list(cell_fill(color = "#EEF2FF"), cell_text(weight = "bold")),
-          locations = cells_stub(rows = estado == "Total columna")
-        ) %>%
-        tab_options(
-          table.font.size             = px(12),
-          heading.title.font.size     = px(13),
-          heading.title.font.weight   = "bold",
-          heading.subtitle.font.size  = px(11),
-          source_notes.font.size      = px(10),
-          table.width                 = pct(100)
-        )
-    }
-    
-    output$tabla_p_transicion  <- gt::render_gt({
-      req(panel_p())
-      .tabla_transicion_gt(
-        panel_p(),
-        format(mes_inicio(), "%B %Y"),
-        format(ultimo_mes(), "%B %Y")
-      )
-    })
-    output$tabla_np_transicion <- gt::render_gt({
-      req(panel_np())
-      .tabla_transicion_gt(
-        panel_np(),
-        format(mes_inicio(), "%B %Y"),
-        format(ultimo_mes(), "%B %Y")
-      )
-    })
-    
-    # ==========================================================================
-    # SANKEY MES A MES
-    # ==========================================================================
-    
-    .build_sankey_data <- function(panel) {
-      meses <- meses_periodo()
-      if (length(meses) < 2) return(NULL)
-      
-      trans <- panel %>%
-        arrange(cliente_id, ym) %>%
-        group_by(cliente_id) %>%
-        mutate(estado_sig = lead(estado), ym_sig = lead(ym)) %>%
-        ungroup() %>%
-        filter(!is.na(estado_sig))
-      
-      .lbl <- function(e) dplyr::recode(e,
-                                        "CLIENTE ACTIVO"      = "Activo",
-                                        "CLIENTE A RECUPERAR" = "A Recuperar",
-                                        "NUEVO DEL PERIODO"   = "Nuevo",
-                                        .default              = e
-      )
-      
-      nodos_orig <- trans %>%
-        mutate(nodo = paste0(.lbl(estado),     "\n", format(ym,     "%b %y")))
-      nodos_dest <- trans %>%
-        mutate(nodo = paste0(.lbl(estado_sig), "\n", format(ym_sig, "%b %y")))
-      
-      all_nodos <- unique(c(nodos_orig$nodo, nodos_dest$nodo))
-      nodo_idx  <- tibble(nodo = all_nodos) %>%
-        mutate(
-          mes_part    = str_extract(nodo, "(?<=\n).+"),
-          estado_part = str_extract(nodo, "^[^\n]+")
-        ) %>%
-        arrange(mes_part, estado_part) %>%
-        mutate(idx = row_number() - 1L)
-      
-      flujos <- bind_cols(
-        nodos_orig %>% select(nodo_orig = nodo),
-        nodos_dest %>% select(nodo_dest = nodo)
-      ) %>%
-        count(nodo_orig, nodo_dest, name = "n") %>%
+        select(cliente_id, LinNegCod, ppto_sacos_anual, ppto_margen_anual) %>%
+        crossing(tibble(ym = meses_periodo())) %>%
         left_join(
-          nodo_idx %>% select(nodo, src = idx) %>% rename(nodo_orig = nodo),
-          by = "nodo_orig"
-        ) %>%
-        left_join(
-          nodo_idx %>% select(nodo, tgt = idx) %>% rename(nodo_dest = nodo),
-          by = "nodo_dest"
-        )
-      
-      color_nodo <- nodo_idx %>%
-        arrange(idx) %>%
-        mutate(color = dplyr::recode(estado_part,
-                                     "Activo"      = "#2C7BB6",
-                                     "A Recuperar" = "#F4A820",
-                                     "Nuevo"       = "#27AE60",
-                                     .default      = "#AAAAAA"
-        )) %>%
-        pull(color)
-      
-      list(nodos = nodo_idx, flujos = flujos, color_nodo = color_nodo)
-    }
-    
-    .graf_sankey <- function(panel) {
-      d <- .build_sankey_data(panel)
-      if (is.null(d)) {
-        return(plot_ly() %>%
-                 layout(title = list(text = "Se requieren al menos 2 meses en el periodo")))
-      }
-      
-      plot_ly(
-        type        = "sankey",
-        orientation = "h",
-        arrangement = "snap",
-        node = list(
-          label     = d$nodos$nodo,
-          color     = d$color_nodo,
-          pad       = 12,
-          thickness = 18,
-          line      = list(color = "white", width = 0.5),
-          hovertemplate = paste0(
-            "<b>%{label}</b><br>",
-            "Flujo total: <b>%{value}</b> UCs",
-            "<extra></extra>"
-          )
-        ),
-        link = list(
-          source        = d$flujos$src,
-          target        = d$flujos$tgt,
-          value         = d$flujos$n,
-          color         = "rgba(180,180,180,0.30)",
-          hovertemplate = paste0(
-            "<b>%{source.label}</b>",
-            " → <b>%{target.label}</b><br>",
-            "Unidades Comerciales: <b>%{value}</b>",
-            "<extra></extra>"
-          )
-        )
-      ) %>%
-        layout(
-          title = list(
-            text    = "Flujo de Transiciones mes a mes — Poblacion Base",
-            font    = list(size = 13, color = "#333"),
-            x       = 0,
-            xanchor = "left"
-          ),
-          font       = list(size = 10),
-          hoverlabel = list(
-            bgcolor     = "rgba(255,255,255,1)",
-            bordercolor = "#cccccc",
-            font        = list(size = 11, color = "#000000"),
-            align       = "left",
-            namelength  = -1
-          ),
-          margin = list(l = 10, r = 10, t = 40, b = 10)
-        ) %>%
-        config(displayModeBar = FALSE)
-    }
-    
-    output$sankey_p  <- renderPlotly({ req(panel_p(),  n_meses() >= 2); .graf_sankey(panel_p())  })
-    output$sankey_np <- renderPlotly({ req(panel_np(), n_meses() >= 2); .graf_sankey(panel_np()) })
-    
-    # ==========================================================================
-    # DESCARGABLES — BotonDescarga de Racafe maneja el boton; solo el handler
-    # ==========================================================================
-    
-    .dl_handler <- function(datos_fn, prefijo) {
-      downloadHandler(
-        filename = function() paste0(prefijo, "_", Sys.Date(), ".xlsx"),
-        content  = function(file) writexl::write_xlsx(datos_fn(), path = file)
-      )
-    }
-    
-    output$dl_presup <- .dl_handler(
-      function() panel_p() %>%
-        left_join(
-          panel_cumpl() %>%
-            select(cliente_id, ym, ppto_sacos_mes, real_sacos,
-                   cumpl_sacos_pct, ppto_margen_mes, real_margen, cumpl_margen_pct),
+          panel_baseline() %>% select(cliente_id, ym, estado),
           by = c("cliente_id", "ym")
         ) %>%
-        left_join(catalogo_rs(),  by = "cliente_id") %>%
-        left_join(tasa_fact_uc(), by = "cliente_id") %>%
-        arrange(cliente_id, ym),
-      "presupuestados"
+        left_join(real_mensual(), by = c("cliente_id", "ym")) %>%
+        mutate(
+          ppto_sacos_mes  = ppto_sacos_anual  / 12,
+          ppto_margen_mes = ppto_margen_anual / 12,
+          real_sacos      = coalesce(real_sacos,  0),
+          real_margen     = coalesce(real_margen, 0),
+          cumpl_sacos_pct = if_else(
+            ppto_sacos_mes  > 0, round(real_sacos  / ppto_sacos_mes  * 100, 1), NA_real_
+          ),
+          cumpl_margen_pct = if_else(
+            ppto_margen_mes > 0, round(real_margen / ppto_margen_mes * 100, 1), NA_real_
+          )
+        ) %>%
+        select(cliente_id, LinNegCod, ym, estado,
+               ppto_sacos_mes, real_sacos, cumpl_sacos_pct,
+               ppto_margen_mes, real_margen, cumpl_margen_pct)
+    })
+    
+    # Tasa de facturación por UC
+    tasa_fact_uc <- reactive({
+      req(panel_full(), meses_periodo())
+      panel_full() %>%
+        group_by(cliente_id) %>%
+        summarise(
+          meses_en_panel  = n_distinct(ym),
+          meses_con_fact  = sum(estado == "CLIENTE ACTIVO", na.rm = TRUE),
+          tasa_facturacion = meses_con_fact / pmax(meses_en_panel, 1),
+          .groups = "drop"
+        )
+    })
+    
+    # Último corte disponible del panel para KPIs inicio/fin
+    corte_ult <- reactive({
+      req(panel_full())
+      ult <- max(panel_full()$ym)
+      panel_full() %>% filter(ym == ult)
+    })
+    
+    # Transiciones ----
+    # Última factura por cliente-línea sobre todo el histórico
+    ultima_fact_r <- reactive({
+      req(data_tx())
+      data_tx() %>%
+        filter(!is.na(FecFact)) %>%
+        group_by(CliNitPpal, LinNegCod) %>%
+        summarise(UltimaFact = max(FecFact, na.rm = TRUE), .groups = "drop") %>%
+        mutate(cliente_id = paste(CliNitPpal, LinNegCod, sep = "_"))
+    })
+    
+    # Parámetro de ventana individual por cliente desde CRMNALSEGR
+    t1_corte <- reactive({
+      req(crm_data(), ultimo_corte())
+      crm_data() %>%
+        filter(FecProceso == ultimo_corte()) %>%
+        select(cliente_id, CliNitPpal, LinNegCod, SegmentoRacafe, Meses)
+    })
+    
+    # Clientes con factura en el mes vigente (t3 en vivo)
+    t3_mes_vigente_r <- reactive({
+      req(data_tx(), mes_vigente())
+      data_tx() %>%
+        filter(!is.na(FecFact), PrimerDia(FecFact) == mes_vigente()) %>%
+        distinct(CliNitPpal, LinNegCod) %>%
+        mutate(cliente_id = paste(CliNitPpal, LinNegCod, sep = "_"))
+    })
+    
+    # Clientes nuevos en t4: creados en los últimos 2 meses
+    t4_nuevos_r <- reactive({
+      NCLIENTE %>%
+        mutate(
+          FecCreacion = as.Date(FecCreacion),
+          FecCreacion = if_else(
+            FecCreacion < as.Date("1900-01-01"), NA_Date_, FecCreacion
+          )
+        ) %>%
+        filter(!is.na(FecCreacion), FecCreacion >= mes_vigente() - months(2)) %>%
+        distinct(CliNitPpal = PerCod)
+    })
+    
+    # Proyección de transiciones para clientes conocidos
+    proyeccion_conocidos <- reactive({
+      req(t1_corte(), ultima_fact_r(), mes_vigente())
+      t1_corte() %>%
+        left_join(ultima_fact_r(), by = c("cliente_id", "CliNitPpal", "LinNegCod")) %>%
+        # Usar catalogo_slim: CliNitPpal y LinNegCod ya vienen de t1_corte
+        left_join(catalogo_slim(), by = "cliente_id") %>%
+        left_join(
+          marca_presupuesto() %>% select(cliente_id, presupuestada),
+          by = "cliente_id"
+        ) %>%
+        mutate(
+          presupuestada    = coalesce(presupuestada, "NO PRESUPUESTADA"),
+          FecLimite        = mes_vigente() - months(Meses),
+          EstadoProyectado = if_else(
+            coalesce(UltimaFact, as.Date("2000-01-01")) >= FecLimite,
+            "CLIENTE", "CLIENTE A RECUPERAR"
+          ),
+          Transicion = case_when(
+            SegmentoRacafe == "CLIENTE" &
+              EstadoProyectado == "CLIENTE A RECUPERAR" ~ "ACTIVO_A_INACTIVO",
+            SegmentoRacafe == "CLIENTE A RECUPERAR" &
+              EstadoProyectado == "CLIENTE"             ~ "INACTIVO_A_ACTIVO",
+            SegmentoRacafe == "CLIENTE" &
+              EstadoProyectado == "CLIENTE"             ~ "MANTIENE_ACTIVO",
+            SegmentoRacafe == "CLIENTE A RECUPERAR" &
+              EstadoProyectado == "CLIENTE A RECUPERAR" ~ "MANTIENE_INACTIVO",
+            TRUE                                        ~ "OTRO"
+          ),
+          # Positivo: días dentro de ventana | Negativo: ya venció
+          DiasHastaVencimiento = as.integer(
+            coalesce(UltimaFact + months(Meses), FecLimite) - Sys.Date()
+          )
+        )
+    })
+    
+    # Nuevos absolutos: facturaron en el mes vigente y creados en t4 últimos 2 meses
+    nuevos_absolutos_r <- reactive({
+      req(t3_mes_vigente_r(), t1_corte(), t4_nuevos_r())
+      t3_mes_vigente_r() %>%
+        anti_join(t1_corte(),    by = c("CliNitPpal", "LinNegCod")) %>%
+        semi_join(t4_nuevos_r(), by = "CliNitPpal") %>%
+        # Usar catalogo_slim: CliNitPpal y LinNegCod ya vienen de t3_mes_vigente_r
+        left_join(catalogo_slim(), by = "cliente_id") %>%
+        mutate(
+          SegmentoRacafe       = NA_character_,
+          Meses                = NA_integer_,
+          presupuestada        = "NO PRESUPUESTADA",
+          UltimaFact           = NA_Date_,
+          FecLimite            = NA_Date_,
+          EstadoProyectado     = "CLIENTE",
+          Transicion           = "NUEVO_ABSOLUTO",
+          DiasHastaVencimiento = NA_integer_
+        )
+    })
+    
+    # Reactivados sin CRM: facturaron, no en t1, no nuevos en t4
+    reactivados_r <- reactive({
+      req(t3_mes_vigente_r(), t1_corte(), t4_nuevos_r())
+      t3_mes_vigente_r() %>%
+        anti_join(t1_corte(),    by = c("CliNitPpal", "LinNegCod")) %>%
+        anti_join(t4_nuevos_r(), by = "CliNitPpal") %>%
+        # Usar catalogo_slim: CliNitPpal y LinNegCod ya vienen de t3_mes_vigente_r
+        left_join(catalogo_slim(), by = "cliente_id") %>%
+        mutate(
+          SegmentoRacafe       = NA_character_,
+          Meses                = NA_integer_,
+          presupuestada        = "NO PRESUPUESTADA",
+          UltimaFact           = NA_Date_,
+          FecLimite            = NA_Date_,
+          EstadoProyectado     = "CLIENTE",
+          Transicion           = "REACTIVADO_SIN_CRM",
+          DiasHastaVencimiento = NA_integer_
+        )
+    })
+    
+    # Consolidado de transiciones
+    transiciones <- reactive({
+      waiter_show(html = preloader_actualizar$html, color = preloader_actualizar$color)
+      req(proyeccion_conocidos(), nuevos_absolutos_r(), reactivados_r())
+      bind_rows(
+        proyeccion_conocidos() %>%
+          select(cliente_id, CliNitPpal, LinNegCod, PerRazSoc, Asesor, Segmento,
+                 SegmentoRacafe, Meses, presupuestada, UltimaFact, FecLimite,
+                 EstadoProyectado, Transicion, DiasHastaVencimiento),
+        nuevos_absolutos_r(),
+        reactivados_r()
+      )
+    })
+    
+    # Indicadores — retención, pérdida, reactivación, tasa fact ----
+    # Helper: calcula los tres indicadores para un subpanel dado
+    .calcular_ind <- function(pan) {
+      meses  <- sort(unique(pan$ym))
+      if (length(meses) < 2) return(list(retencion = NA, perdida = NA, reactivacion = NA))
+      pares <- tibble(ym_t = head(meses, -1), ym_t1 = tail(meses, -1))
+      trans <- pares %>%
+        left_join(pan %>% select(cliente_id, ym, estado) %>% rename(ym_t = ym, est_t = estado),
+                  by = "ym_t") %>%
+        left_join(pan %>% select(cliente_id, ym, estado) %>% rename(ym_t1 = ym, est_t1 = estado),
+                  by = c("cliente_id", "ym_t1"))
+      activos_t   <- trans %>% filter(est_t == "CLIENTE ACTIVO") %>% nrow()
+      recuperar_t <- trans %>% filter(est_t == "CLIENTE A RECUPERAR") %>% nrow()
+      list(
+        retencion    = SiError_0(
+          trans %>% filter(est_t == "CLIENTE ACTIVO", est_t1 == "CLIENTE ACTIVO") %>% nrow() /
+            activos_t
+        ),
+        perdida      = SiError_0(
+          trans %>%
+            filter(est_t == "CLIENTE ACTIVO", est_t1 == "CLIENTE A RECUPERAR") %>%
+            nrow() / activos_t
+        ),
+        reactivacion = SiError_0(
+          trans %>%
+            filter(est_t == "CLIENTE A RECUPERAR", est_t1 == "CLIENTE ACTIVO") %>%
+            nrow() / recuperar_t
+        )
+      )
+    }
+    ind_full <- reactive({ req(panel_full()); .calcular_ind(panel_full()) })
+    ind_p    <- reactive({ req(panel_p());    .calcular_ind(panel_p())    })
+    ind_np   <- reactive({ req(panel_np());   .calcular_ind(panel_np())   })
+    
+    # Tasa de facturación global
+    tasa_fact_global <- reactive({
+      req(tasa_fact_uc())
+      mean(tasa_fact_uc()$tasa_facturacion, na.rm = TRUE)
+    })
+    
+    # Tabla resumen Mensual ----
+    # Función que construye la tabla pivote para una población dada
+    .tabla_resumen <- function(pan) {
+      req(pan, meses_periodo())
+      meses <- meses_periodo()
+      # Conteo por estado y mes
+      conteos <- pan %>%
+        group_by(estado, ym) %>%
+        summarise(n = n_distinct(cliente_id), .groups = "drop")
+      # Totales por mes
+      totales <- conteos %>%
+        group_by(ym) %>%
+        summarise(n = sum(n), .groups = "drop") %>%
+        mutate(estado = "TOTAL")
+      # Pivote: estados en filas, meses en columnas
+      bind_rows(conteos, totales) %>%
+        mutate(
+          estado = factor(estado, levels = c(
+            "CLIENTE ACTIVO", "CLIENTE A RECUPERAR",
+            "NUEVO DEL PERIODO", "TOTAL"
+          )),
+          mes_lbl = format(ym, "%b-%y")
+        ) %>%
+        select(estado, mes_lbl, n) %>%
+        tidyr::pivot_wider(names_from = mes_lbl, values_from = n, values_fill = 0L) %>%
+        arrange(estado)
+    }
+    
+    # Poblacion activa ----
+    # Población seleccionada: combinación de checkboxes
+    poblacion_activa <- reactive({
+      req(panel_full())
+      pobs <- c()
+      if (isTRUE(input$pob_total))       pobs <- c(pobs, "TOTAL")
+      if (isTRUE(input$pob_presup))      pobs <- c(pobs, "PRESUPUESTADA")
+      if (isTRUE(input$pob_sin_presup))  pobs <- c(pobs, "NO PRESUPUESTADA")
+      if (length(pobs) == 0) pobs <- "TOTAL"
+      pobs
+    })
+    # Panel filtrado según población activa
+    panel_activo <- reactive({
+      waiter_show(html = preloader_actualizar$html, color = preloader_actualizar$color)
+      on.exit(waiter_hide())
+      req(panel_full(), poblacion_activa())
+      if ("TOTAL" %in% poblacion_activa()) return(panel_full())
+      panel_full() %>%
+        filter(presupuestada %in% poblacion_activa())
+    })
+    
+    # Outputs ----
+    observe({
+      ids_plotly <- c(
+        ns("graf_evolucion"),
+        ns("graf_permanencia")
+      )
+      session$userData$.plotlyShinyEventIDs <- union(
+        session$userData$.plotlyShinyEventIDs %||% character(0),
+        ids_plotly
+      )
+    })
+    ## Bloque 1: KPIs de alerta clickeables ----
+    
+    # Tabla de clientes en riesgo de inactivarse
+    output$tbl_a_inactivo <- reactable::renderReactable({
+      req(transiciones())
+      .reactable_uc(
+        transiciones() %>%
+          filter(Transicion == "ACTIVO_A_INACTIVO") %>%
+          mutate(estado = Transicion),
+        ns("click_alerta_inactivo")
+      )
+    })
+    CajaModal(
+      "kpi_a_inactivo",
+      valor   = reactive(html_valor(
+        transiciones() %>% filter(Transicion == "ACTIVO_A_INACTIVO") %>% nrow(),
+        formato = "numero", color = "#E74C3C"
+      )),
+      texto           = html_texto("Van a Inactivarse", color = "#E74C3C"),
+      icono           = "user-times",
+      colores         = c(fondo = "white"),
+      color_fondo_hex = "#FADBD8",
+      mostrar_boton   = TRUE,
+      titulo_modal    = "Detalle \u2014 Clientes en Riesgo de Inactivarse",
+      icono_modal     = "user-times",
+      contenido_modal = function() reactable::reactableOutput(ns("tbl_a_inactivo")),
+      footer          = reactive(paste0(
+        "Clientes activos que superaron su ventana de inactividad al mes vigente"
+      )),
+      footer_class    = "caja-modal-footer"
     )
     
-    output$dl_np_todos <- .dl_handler(
-      function() panel_np() %>%
-        left_join(catalogo_rs(),  by = "cliente_id") %>%
-        left_join(tasa_fact_uc(), by = "cliente_id") %>%
-        arrange(cliente_id, ym),
-      "no_presupuestados"
+    # Tabla de clientes en recuperación
+    output$tbl_a_activo <- reactable::renderReactable({
+      req(transiciones())
+      .reactable_uc(
+        transiciones() %>%
+          filter(Transicion == "INACTIVO_A_ACTIVO") %>%
+          mutate(estado = Transicion),
+        ns("click_alerta_activo")
+      )
+    })
+    CajaModal(
+      "kpi_a_activo",
+      valor   = reactive(html_valor(
+        transiciones() %>% filter(Transicion == "INACTIVO_A_ACTIVO") %>% nrow(),
+        formato = "numero", color = "#27AE60"
+      )),
+      texto           = html_texto("Se Van a Recuperar", color = "#27AE60"),
+      icono           = "user-check",
+      colores         = c(fondo = "white"),
+      color_fondo_hex = "#D5F5E3",
+      mostrar_boton   = TRUE,
+      titulo_modal    = "Detalle \u2014 Clientes en Recuperaci\u00f3n",
+      icono_modal     = "user-check",
+      contenido_modal = function() reactable::reactableOutput(ns("tbl_a_activo")),
+      footer          = reactive("Inactivos que facturaron dentro de su ventana este mes"),
+      footer_class    = "caja-modal-footer"
     )
     
-    output$dl_np_nuevos <- .dl_handler(
+    # Tabla de clientes nuevos absolutos
+    output$tbl_nuevo <- reactable::renderReactable({
+      req(transiciones())
+      .reactable_uc(
+        transiciones() %>%
+          filter(Transicion == "NUEVO_ABSOLUTO") %>%
+          mutate(estado = Transicion),
+        ns("click_alerta_nuevo")
+      )
+    })
+    CajaModal(
+      "kpi_nuevo",
+      valor   = reactive(html_valor(
+        transiciones() %>% filter(Transicion == "NUEVO_ABSOLUTO") %>% nrow(),
+        formato = "numero", color = "#2C7BB6"
+      )),
+      texto           = html_texto("Clientes Nuevos", color = "#2C7BB6"),
+      icono           = "user-plus",
+      colores         = c(fondo = "white"),
+      color_fondo_hex = "#D6EAF8",
+      mostrar_boton   = TRUE,
+      titulo_modal    = "Detalle \u2014 Clientes Nuevos Absolutos",
+      icono_modal     = "user-plus",
+      contenido_modal = function() reactable::reactableOutput(ns("tbl_nuevo")),
+      footer          = reactive(
+        "Creados en t4 en los \u00faltimos 2 meses, primera factura este mes"
+      ),
+      footer_class    = "caja-modal-footer"
+    )
+    
+    # Tabla de reactivados sin historial CRM
+    output$tbl_reactivado <- reactable::renderReactable({
+      req(transiciones())
+      .reactable_uc(
+        transiciones() %>%
+          filter(Transicion == "REACTIVADO_SIN_CRM") %>%
+          mutate(estado = Transicion),
+        ns("click_alerta_reactivado")
+      )
+    })
+    CajaModal(
+      "kpi_reactivado",
+      valor   = reactive(html_valor(
+        transiciones() %>% filter(Transicion == "REACTIVADO_SIN_CRM") %>% nrow(),
+        formato = "numero", color = "#F4A820"
+      )),
+      texto           = html_texto("Reactivados sin CRM", color = "#F4A820"),
+      icono           = "user-clock",
+      colores         = c(fondo = "white"),
+      color_fondo_hex = "#FEF9E7",
+      mostrar_boton   = TRUE,
+      titulo_modal    = "Detalle \u2014 Reactivados sin Historial CRM",
+      icono_modal     = "user-clock",
+      contenido_modal = function() reactable::reactableOutput(ns("tbl_reactivado")),
+      footer          = reactive(
+        "Facturaron este mes; existen en maestro pero sin clasificaci\u00f3n CRM"
+      ),
+      footer_class    = "caja-modal-footer"
+    )
+    
+    ## Bloque 2: Indicadores dinámicos globales ----
+    
+    CajaModal(
+      "kpi_retencion",
+      valor   = reactive(html_valor(
+        ind_full()$retencion %||% 0, "porcentaje",
+        color = .color_kpi(ind_full()$retencion, "retencion")
+      )),
+      texto = "Retenci\u00f3n", icono = "shield-alt",
+      colores = c(fondo = "white"), mostrar_boton = FALSE
+    )
+    CajaModal(
+      "kpi_perdida",
+      valor   = reactive(html_valor(
+        ind_full()$perdida %||% 0, "porcentaje",
+        color = .color_kpi(ind_full()$perdida, "perdida")
+      )),
+      texto = "P\u00e9rdida", icono = "user-minus",
+      colores = c(fondo = "white"), mostrar_boton = FALSE
+    )
+    CajaModal(
+      "kpi_reactivacion",
+      valor   = reactive(html_valor(
+        ind_full()$reactivacion %||% 0, "porcentaje",
+        color = .color_kpi(ind_full()$reactivacion, "reactivacion")
+      )),
+      texto = "Reactivaci\u00f3n", icono = "sync-alt",
+      colores = c(fondo = "white"), mostrar_boton = FALSE
+    )
+    CajaModal(
+      "kpi_tasa_fact",
+      valor   = reactive(html_valor(
+        tasa_fact_global() %||% 0, "porcentaje",
+        color = .color_kpi(tasa_fact_global(), "tasa_fact")
+      )),
+      texto = "Tasa Facturaci\u00f3n", icono = "percentage",
+      colores = c(fondo = "white"), mostrar_boton = FALSE
+    )
+    
+    ## Bloque 3: Cajas por población (renderUI reactivo) ----
+    
+    output$lbl_mes_vigente <- renderUI({
+      paste0("Mes Vigente \u2014 ", format(mes_vigente(), "%B %Y"))
+    })
+    
+    # Fuente de valores para CajaModal por población — reactivos con cierre sobre pan_r/ind_r
+    .vals_poblacion <- function(pan_r, ind_r) {
+      list(
+        enero = reactive({
+          req(pan_r(), mes_inicio(), tasa_fact_uc())
+          corte <- pan_r() %>% filter(ym == mes_inicio())
+          list(
+            activo    = n_distinct(corte$cliente_id[corte$estado == "CLIENTE ACTIVO"]),
+            recuperar = n_distinct(
+              corte$cliente_id[corte$estado == "CLIENTE A RECUPERAR"]
+            ),
+            nuevos    = n_distinct(
+              corte$cliente_id[corte$tipo_cohorte == "ALTA EN COHORTE"]
+            ),
+            tasa      = mean(
+              tasa_fact_uc() %>%
+                semi_join(corte, by = "cliente_id") %>%
+                pull(tasa_facturacion),
+              na.rm = TRUE
+            )
+          )
+        }),
+        vigente = reactive({
+          req(pan_r(), tasa_fact_uc())
+          corte <- pan_r() %>% filter(ym == max(pan_r()$ym))
+          list(
+            activo    = n_distinct(corte$cliente_id[corte$estado == "CLIENTE ACTIVO"]),
+            recuperar = n_distinct(
+              corte$cliente_id[corte$estado == "CLIENTE A RECUPERAR"]
+            ),
+            nuevos    = n_distinct(
+              corte$cliente_id[corte$tipo_cohorte == "ALTA EN COHORTE"]
+            ),
+            tasa      = mean(
+              tasa_fact_uc() %>%
+                semi_join(corte, by = "cliente_id") %>%
+                pull(tasa_facturacion),
+              na.rm = TRUE
+            )
+          )
+        }),
+        ind = ind_r
+      )
+    }
+    
+    # Mapa de valores para las tres poblaciones posibles — llaves sanitizadas
+    vals_pob <- list(
+      TOTAL            = .vals_poblacion(panel_full, ind_full),
+      PRESUPUESTADA    = .vals_poblacion(panel_p,    ind_p),
+      NO_PRESUPUESTADA = .vals_poblacion(panel_np,   ind_np)
+    )
+    
+    n_distinct_uc <- function(df) dplyr::n_distinct(df$cliente_id)
+    
+    # Pre-registro de CajaModal para todas las poblaciones posibles.
+    # Se registran las tres siempre; Shiny evalúa outputs lazy,
+    # por lo que las cajas ocultas no generan cómputo hasta que se muestran.
+    for (pop_lbl in c("TOTAL", "PRESUPUESTADA", "NO PRESUPUESTADA")) {
+      local({
+        p   <- pop_lbl
+        pid <- .pob_id(p)
+        vp  <- vals_pob[[pid]]
+        
+        # Cajas Enero
+        CajaModal(
+          paste0("kpi_enero_activo_", pid),
+          valor        = reactive(
+            html_valor(vp$enero()$activo, "numero", color = "#2C7BB6")
+          ),
+          texto = "Activos Enero", icono = "user-check",
+          colores = c(fondo = "white"), mostrar_boton = FALSE
+        )
+        CajaModal(
+          paste0("kpi_enero_recuperar_", pid),
+          valor        = reactive(
+            html_valor(vp$enero()$recuperar, "numero", color = "#F4A820")
+          ),
+          texto = "A Recuperar Enero", icono = "user-clock",
+          colores = c(fondo = "white"), mostrar_boton = FALSE
+        )
+        CajaModal(
+          paste0("kpi_enero_nuevos_", pid),
+          valor        = reactive(
+            html_valor(vp$enero()$nuevos, "numero", color = "#27AE60")
+          ),
+          texto = "Nuevos Enero", icono = "user-plus",
+          colores = c(fondo = "white"), mostrar_boton = FALSE
+        )
+        CajaModal(
+          paste0("kpi_enero_tasa_", pid),
+          valor        = reactive(html_valor(
+            vp$enero()$tasa %||% 0, "porcentaje",
+            color = .color_kpi(vp$enero()$tasa, "tasa_fact")
+          )),
+          texto = "Tasa Facturaci\u00f3n", icono = "percentage",
+          colores = c(fondo = "white"), mostrar_boton = FALSE
+        )
+        
+        # Cajas Vigente
+        CajaModal(
+          paste0("kpi_vig_activo_", pid),
+          valor        = reactive(
+            html_valor(vp$vigente()$activo, "numero", color = "#2C7BB6")
+          ),
+          texto = "Activos", icono = "user-check",
+          colores = c(fondo = "white"), mostrar_boton = FALSE
+        )
+        CajaModal(
+          paste0("kpi_vig_recuperar_", pid),
+          valor        = reactive(
+            html_valor(vp$vigente()$recuperar, "numero", color = "#F4A820")
+          ),
+          texto = "A Recuperar", icono = "user-clock",
+          colores = c(fondo = "white"), mostrar_boton = FALSE
+        )
+        CajaModal(
+          paste0("kpi_vig_nuevos_", pid),
+          valor        = reactive(
+            html_valor(vp$vigente()$nuevos, "numero", color = "#27AE60")
+          ),
+          texto = "Nuevos", icono = "user-plus",
+          colores = c(fondo = "white"), mostrar_boton = FALSE
+        )
+        CajaModal(
+          paste0("kpi_vig_tasa_", pid),
+          valor        = reactive(html_valor(
+            vp$vigente()$tasa %||% 0, "porcentaje",
+            color = .color_kpi(vp$vigente()$tasa, "tasa_fact")
+          )),
+          texto = "Tasa Facturaci\u00f3n", icono = "percentage",
+          colores = c(fondo = "white"), mostrar_boton = FALSE
+        )
+        
+        # Cajas Dinámicos
+        CajaModal(
+          paste0("kpi_din_ret_", pid),
+          valor        = reactive(html_valor(
+            vp$ind()$retencion %||% 0, "porcentaje",
+            color = .color_kpi(vp$ind()$retencion, "retencion")
+          )),
+          texto = "Retenci\u00f3n", icono = "shield-alt",
+          colores = c(fondo = "white"), mostrar_boton = FALSE
+        )
+        CajaModal(
+          paste0("kpi_din_per_", pid),
+          valor        = reactive(html_valor(
+            vp$ind()$perdida %||% 0, "porcentaje",
+            color = .color_kpi(vp$ind()$perdida, "perdida")
+          )),
+          texto = "P\u00e9rdida", icono = "user-minus",
+          colores = c(fondo = "white"), mostrar_boton = FALSE
+        )
+        CajaModal(
+          paste0("kpi_din_rea_", pid),
+          valor        = reactive(html_valor(
+            vp$ind()$reactivacion %||% 0, "porcentaje",
+            color = .color_kpi(vp$ind()$reactivacion, "reactivacion")
+          )),
+          texto = "Reactivaci\u00f3n", icono = "sync-alt",
+          colores = c(fondo = "white"), mostrar_boton = FALSE
+        )
+      })
+    }
+    
+    # Renderiza filas de cajas según checkboxes activos — IDs sanitizados
+    output$cajas_enero <- renderUI({
+      pobs <- poblacion_activa()
+      cols <- lapply(pobs, function(p) {
+        pid <- .pob_id(p)
+        column(
+          12 / length(pobs),
+          h6(p, style = "font-weight:700; color:#2C7BB6; text-align:center;"),
+          fluidRow(
+            column(3, CajaModalUI(ns(paste0("kpi_enero_activo_",    pid)))),
+            column(3, CajaModalUI(ns(paste0("kpi_enero_recuperar_", pid)))),
+            column(3, CajaModalUI(ns(paste0("kpi_enero_nuevos_",    pid)))),
+            column(3, CajaModalUI(ns(paste0("kpi_enero_tasa_",      pid))))
+          )
+        )
+      })
+      do.call(fluidRow, cols)
+    })
+    
+    output$cajas_vigente <- renderUI({
+      pobs <- poblacion_activa()
+      cols <- lapply(pobs, function(p) {
+        pid <- .pob_id(p)
+        column(
+          12 / length(pobs),
+          h6(p, style = "font-weight:700; color:#F4A820; text-align:center;"),
+          fluidRow(
+            column(3, CajaModalUI(ns(paste0("kpi_vig_activo_",    pid)))),
+            column(3, CajaModalUI(ns(paste0("kpi_vig_recuperar_", pid)))),
+            column(3, CajaModalUI(ns(paste0("kpi_vig_nuevos_",    pid)))),
+            column(3, CajaModalUI(ns(paste0("kpi_vig_tasa_",      pid))))
+          )
+        )
+      })
+      do.call(fluidRow, cols)
+    })
+    
+    output$cajas_dinamicos <- renderUI({
+      pobs <- poblacion_activa()
+      cols <- lapply(pobs, function(p) {
+        pid <- .pob_id(p)
+        column(
+          12 / length(pobs),
+          h6(p, style = "font-weight:700; color:#555; text-align:center;"),
+          fluidRow(
+            column(4, CajaModalUI(ns(paste0("kpi_din_ret_", pid)))),
+            column(4, CajaModalUI(ns(paste0("kpi_din_per_", pid)))),
+            column(4, CajaModalUI(ns(paste0("kpi_din_rea_", pid))))
+          ),
+          fluidRow(
+            column(4, .te_nota("Activos t \u2192 Activos t+1 / Total Activos en t")),
+            column(4, .te_nota("Activos t \u2192 A Recuperar t+1 / Total Activos en t")),
+            column(4, .te_nota(
+              "A Recuperar t \u2192 Activos t+1 / Total A Recuperar en t"
+            ))
+          )
+        )
+      })
+      do.call(fluidRow, cols)
+    })
+    
+    ## Tabla resumen mensual (estados en filas, meses en columnas) ----
+    output$tabla_resumen_mensual <- reactable::renderReactable({
+      req(panel_activo())
+      tab <- .tabla_resumen(panel_activo())
+      # Columnas dinámicas: una por mes
+      col_mes <- lapply(
+        setdiff(names(tab), "estado"),
+        function(m) {
+          reactable::colDef(
+            name     = m,
+            minWidth = 70,
+            # Clic en celda → modal con detalle de clientes
+            cell = function(value, index) {
+              estado_fila <- tab$estado[[index]]
+              tags$span(
+                style   = "cursor:pointer; font-weight:600;",
+                onclick = sprintf(
+                  "Shiny.setInputValue('%s', {estado: '%s', mes: '%s', nonce: Math.random()},
+                   {priority: 'event'})",
+                  ns("click_celda_resumen"), estado_fila, m
+                ),
+                format(value, big.mark = ".")
+              )
+            }
+          )
+        }
+      )
+      names(col_mes) <- setdiff(names(tab), "estado")
+      reactable::reactable(
+        tab,
+        columns  = c(
+          list(estado = reactable::colDef(name = "Estado", minWidth = 180, sticky = "left")),
+          col_mes
+        ),
+        highlight = TRUE, compact = TRUE, bordered = TRUE,
+        pagination = FALSE
+      )
+    })
+    
+    # Modal al hacer clic en celda de tabla resumen
+    observeEvent(input$click_celda_resumen, {
+      req(!is.null(input$click_celda_resumen$estado))
+      estado_sel <- input$click_celda_resumen$estado
+      mes_sel    <- input$click_celda_resumen$mes
+      # Reconstruir fecha desde etiqueta "Ene-25"
+      fecha_sel <- tryCatch(
+        as.Date(paste0("01-", mes_sel), format = "%d-%b-%y"),
+        error = function(e) NULL
+      )
+      req(!is.null(fecha_sel))
+      
+      # Clientes del panel en el corte seleccionado (panel ya trae atributos slim)
+      clientes_mes <- panel_activo() %>%
+        filter(ym == fecha_sel) %>%
+        {
+          if (estado_sel == "TOTAL") .
+          else filter(., estado == estado_sel)
+        } %>%
+        select(cliente_id, CliNitPpal, LinNegCod, PerRazSoc, Asesor, Segmento, estado)
+      
+      # Transacciones del mes: última factura, sacos y margen acumulados del mes
+      tx_mes <- tx_limpia() %>%
+        filter(ym == fecha_sel) %>%
+        semi_join(clientes_mes, by = "cliente_id") %>%
+        group_by(cliente_id, CliNitPpal, LinNegCod) %>%
+        summarise(
+          ultima_fec_fact = max(FecFact, na.rm = TRUE),
+          sacos           = sum(coalesce(SacFact70, 0), na.rm = TRUE),
+          margen          = sum(coalesce(Margen,    0), na.rm = TRUE),
+          .groups = "drop"
+        )
+      
+      # Última fecha de pedido: se toma de data_tx completo si la columna existe
+      tiene_pedido <- "FecPedido" %in% names(data_tx())
+      if (tiene_pedido) {
+        pedido_mes <- data_tx() %>%
+          filter(!is.na(FecPedido), PrimerDia(FecFact) == fecha_sel) %>%
+          semi_join(clientes_mes, by = "cliente_id") %>%
+          group_by(cliente_id) %>%
+          summarise(ultima_fec_pedido = max(FecPedido, na.rm = TRUE), .groups = "drop")
+        tx_mes <- left_join(tx_mes, pedido_mes, by = "cliente_id")
+      } else {
+        tx_mes <- mutate(tx_mes, ultima_fec_pedido = NA_Date_)
+      }
+      
+      # Panel enriquecido: atributos del cliente + métricas del mes
+      data_drill <- clientes_mes %>%
+        left_join(
+          tx_mes %>% select(cliente_id, ultima_fec_pedido, ultima_fec_fact,
+                            sacos, margen),
+          by = "cliente_id"
+        )
+      
+      # Reactable de drill-down con columnas extendidas
+      showModal(modalDialog(
+        title     = tagList(
+          icon("users"), " ", estado_sel, " \u2014 ", mes_sel
+        ),
+        size      = "xl", easyClose = TRUE, footer = modalButton("Cerrar"),
+        reactable::reactable(
+          data_drill,
+          columns = list(
+            cliente_id        = reactable::colDef(show = FALSE),
+            PerRazSoc         = reactable::colDef(name = "Raz\u00f3n Social",
+                                                  minWidth = 200, sticky = "left"),
+            CliNitPpal        = reactable::colDef(name = "NIT",          minWidth = 110),
+            LinNegCod         = reactable::colDef(name = "L\u00ednea",   minWidth = 80),
+            Segmento          = reactable::colDef(name = "Segmento",     minWidth = 100),
+            Asesor            = reactable::colDef(name = "Asesor",       minWidth = 120),
+            estado            = reactable::colDef(name = "Estado",       minWidth = 140),
+            ultima_fec_pedido = reactable::colDef(
+              name     = "\u00dalt. Pedido",    minWidth = 110,
+              format   = reactable::colFormat(date = TRUE, locales = "es-CO")
+            ),
+            ultima_fec_fact   = reactable::colDef(
+              name     = "\u00dalt. Facturaci\u00f3n", minWidth = 120,
+              format   = reactable::colFormat(date = TRUE, locales = "es-CO")
+            ),
+            sacos             = reactable::colDef(
+              name   = "Sacos",      minWidth = 80,
+              format = reactable::colFormat(separators = TRUE, digits = 1)
+            ),
+            margen            = reactable::colDef(
+              name   = "Margen ($)", minWidth = 110,
+              format = reactable::colFormat(separators = TRUE, digits = 0, prefix = "$")
+            )
+          ),
+          highlight  = TRUE, compact = TRUE, bordered = TRUE,
+          pagination = FALSE, searchable = TRUE, filterable = TRUE
+        )
+      ))
+    }, ignoreNULL = TRUE, ignoreInit = TRUE)
+    
+    ## Gráficos evolución y permanencia ----
+    
+    output$graf_evolucion <- renderPlotly({
+      req(panel_activo())
+      df <- panel_activo() %>%
+        group_by(ym, estado) %>%
+        summarise(n = n_distinct(cliente_id), .groups = "drop") %>%
+        mutate(
+          estado = factor(estado, levels = c(
+            "CLIENTE ACTIVO", "CLIENTE A RECUPERAR", "NUEVO DEL PERIODO"
+          )),
+          mes_lbl = format(ym, "%b-%y")
+        )
+      colores <- c(
+        "CLIENTE ACTIVO"      = "#2C7BB6",
+        "CLIENTE A RECUPERAR" = "#F4A820",
+        "NUEVO DEL PERIODO"   = "#27AE60"
+      )
+      plotly::plot_ly(df,
+                      x     = ~mes_lbl, y = ~n, color = ~estado,
+                      colors = colores, type = "bar"
+      ) %>%
+        plotly::layout(
+          barmode = "stack",
+          xaxis   = list(title = "", tickangle = -45),
+          yaxis   = list(title = "Clientes"),
+          legend  = list(orientation = "h", y = -0.25),
+          margin  = list(l = 10, r = 10, t = 30, b = 10)
+        ) %>%
+        plotly::config(displayModeBar = FALSE)
+    })
+    
+    output$graf_permanencia <- renderPlotly({
+      req(tasa_fact_uc(), panel_activo())
+      df <- tasa_fact_uc() %>%
+        semi_join(panel_activo() %>% distinct(cliente_id), by = "cliente_id") %>%
+        mutate(
+          Rango = cut(
+            tasa_facturacion,
+            breaks = c(0, .25, .5, .75, 1.001),
+            labels = c("0-25%", "25-50%", "50-75%", "75-100%"),
+            right  = FALSE
+          )
+        ) %>%
+        count(Rango)
+      plotly::plot_ly(df,
+                      x     = ~Rango, y = ~n, type = "bar",
+                      marker = list(color = "#2C7BB6")
+      ) %>%
+        plotly::layout(
+          xaxis  = list(title = "Tasa de Facturaci\u00f3n"),
+          yaxis  = list(title = "Clientes"),
+          margin = list(l = 10, r = 10, t = 30, b = 10)
+        ) %>%
+        plotly::config(displayModeBar = FALSE)
+    })
+    
+    # Descargas ----
+    
+    output$dl_poblacion <- .dl_handler(
+      function() panel_activo() %>%
+        left_join(tasa_fact_uc(), by = "cliente_id") %>%
+        arrange(cliente_id, ym),
+      "poblacion"
+    )
+    
+    output$dl_altas <- .dl_handler(
       function() panel_altas() %>%
-        filter(presupuestada == "NO PRESUPUESTADA") %>%
-        left_join(catalogo_rs(),  by = "cliente_id") %>%
+        left_join(catalogo_slim(), by = "cliente_id") %>%
         left_join(tasa_fact_uc(), by = "cliente_id") %>%
         arrange(cliente_id, ym),
       "altas_cohorte"
     )
     
-    output$dl_np_recuperar <- .dl_handler(
-      function() panel_np() %>%
-        filter(estado == "CLIENTE A RECUPERAR") %>%
-        left_join(catalogo_rs(),  by = "cliente_id") %>%
-        left_join(tasa_fact_uc(), by = "cliente_id") %>%
-        arrange(cliente_id, ym),
-      "clientes_a_recuperar"
-    )
-    
   })
 }
 
-# ==============================================================================
-# APP DE PRUEBA
-# ==============================================================================
-
-ui <- bs4Dash::bs4DashPage(
-  title   = "Analisis de Cohortes Downstream",
-  header  = bs4Dash::bs4DashNavbar(skin = "dark"),
-  sidebar = bs4Dash::bs4DashSidebar(
-    skin = "dark",
-    bs4Dash::bs4SidebarMenu(
-      bs4Dash::bs4SidebarMenuItem(
-        "Cohorte Operativa", tabName = "cohortes",
-        icon = shiny::icon("layer-group")
-      )
-    )
-  ),
-  body = bs4Dash::bs4DashBody(
-    bs4Dash::bs4TabItems(
-      bs4Dash::bs4TabItem(
-        "cohortes",
-        fluidRow(
-          column(4,
-                 dateRangeInput("FT_Fecha", "",
-                                start     = PrimerDia(Sys.Date(), uni = "year"),
-                                min       = min(data$FecFact, na.rm = TRUE),
-                                end       = max(data$FecFact, na.rm = TRUE),
-                                max       = max(data$FecFact, na.rm = TRUE),
-                                language  = "es",
-                                separator = " - ",
-                                format    = "dd/mm/yyyy"
-                 )
-          )
-        ),
-        CohortesUI("cohortes")
-      )
-    )
-  ),
-  footer = bs4Dash::bs4DashFooter(
-    left  = "Racafe Analytics — Analisis Downstream",
-    right = format(Sys.Date(), "%Y")
-  )
+# App de prueba ----
+options(OutDec = ",") 
+ui <- bs4DashPage(
+  title = "Presupuesto", header = bs4DashNavbar(),
+  sidebar = bs4DashSidebar(), controlbar = bs4DashControlbar(),
+  footer = bs4DashFooter(),
+  body   = bs4DashBody(useShinyjs(), 
+                       includeCSS("https://raw.githubusercontent.com/HCamiloYateT/Compartido/refs/heads/main/Styles/style.css"),
+                       CohortesUI("Prueba"))
 )
-
 server <- function(input, output, session) {
-  Cohortes(
-    "cohortes",
-    data_tx     = reactive(BaseDatos),
-    fecha_rango = reactive(input$FT_Fecha)
-  )
+  Cohortes("Prueba", reactive({BaseDatos_c}), reactive({c(as.Date("2026-01-01"), as.Date("2026-05-16"))}))
 }
-
-shiny::shinyApp(ui, server)
+shinyApp(ui, server)

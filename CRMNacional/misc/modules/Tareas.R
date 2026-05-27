@@ -63,7 +63,7 @@
   tags$span(class = "tsk-badge", style = paste0("background-color:", color, ";"), texto)
 }
 
-# Construir data.frame para SubirDatos (sin campo Responsable)
+# Construir data.frame para racafe::AgregarDatos (sin campo Responsable)
 .tsk_construir_registro <- function(input, usr, note_id, fecha_cum,
                                     list_items, list_checked) {
   data.frame(
@@ -425,7 +425,7 @@ TaskCreation <- function(id, usr, notes_data) {
           if (is.null(input$TSK_FechaFin)) Sys.Date() else as.Date(input$TSK_FechaFin)
         } else Sys.Date()
         
-        SubirDatos(
+        racafe::AgregarDatos(
           .tsk_construir_registro(input, usr, note_id, fecha_cum, list_items, list_checked),
           "CRMNALNOTAS"
         )

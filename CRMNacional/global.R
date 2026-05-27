@@ -17,7 +17,8 @@ required_packages <- c("shiny", "bs4Dash", "shinyBS", "shinyjs", "shinytoastr", 
                        "shinybusy", "shinyGizmo", "DBI", "tidyverse", "lubridate", "DT", 
                        "rvest", "phosphoricons", "racafe", "scales", "plotly", "colorspace", 
                        "rlang", "rhandsontable", "waiter", "gt", "blastula", "tsibble",
-                       "fabletools", "tsibble", "forecast", "prophet", "fable", "racafeModulos")
+                       "fabletools", "tsibble", "forecast", "prophet", "fable", "racafeModulos", 
+                       "reactable")
 racafe::Loadpkg(required_packages)
 
 # Carga de scripts utilitarios

@@ -138,31 +138,40 @@ cargar_lotes_incremental <- function(datos_previos = NULL) {
 # porque GROUP BY opera sobre el universo completo y colapsa a un registro por
 # lote+tipo independientemente del ano de facturacion.
 cargar_fact <- function() {
-  fact_sys <- ConsultaSistema(
-    "syscafe",
-    query = "SELECT F1.FcnLot      AS CLLotCod,
-                    F2.FcnTip,
-                    MIN(F2.FcnFec) AS FecPrimerFact,
-                    MAX(F2.FcnFec) AS FecFact,
-                    SUM(F1.FcnKilLot)         AS KilosFact,
-                    SUM(F1.FcnSacLot)         AS SacosFact,
-                    SUM(F1.FcnKilLot / 70)    AS SacFact70
-             FROM   FCTFACN1 F1
-             LEFT   JOIN FCTFACNA F2 ON F1.FcnNum = F2.FcnNum
-             WHERE  F1.CiaCod = 10
-               AND  F2.CiaCod = 10
-               AND  F2.FcnEtd = 'C'
-             GROUP  BY F1.FcnLot, F2.FcnTip"
-  )
-  fact_margenes <- Consulta(
-    "SELECT LOTE            AS CLLotCod,
-            SUM(MARGEN)     AS Margen,
-            SUM(KILOS / 70) AS SacosPYG
-     FROM   CRMNALMARLOT
-     WHERE  TIP = 'NAL'
-     GROUP  BY LOTE"
-  )
-  fact_sys %>%
+  fact_sys_nal <- ConsultaSistema("syscafe",
+                              query = "SELECT F1.FcnLot      AS CLLotCod,
+                                              MIN(F2.FcnFec) AS FecPrimerFact,
+                                              MAX(F2.FcnFec) AS FecFact,
+                                              SUM(F1.FcnKilLot)         AS KilosFact,
+                                              SUM(F1.FcnSacLot)         AS SacosFact,
+                                              SUM(F1.FcnKilLot / 70.)    AS SacFact70
+                                       FROM   FCTFACN1 F1
+                                       LEFT   JOIN FCTFACNA F2 ON F1.FcnNum = F2.FcnNum
+                                       WHERE  F1.CiaCod = 10 AND  
+                                              F2.CiaCod = 10 AND  
+                                              F2.FcnEtd = 'C'
+                                      GROUP  BY F1.FcnLot")
+  fact_sys_ext <- ConsultaSistema("syscafe",
+                                   query = "SELECT F1.FctLot AS CLLotCod,
+                                                   MIN(F2.FctFec)         AS FecPrimerFact,
+                                                   MAX(F2.FctFec)         AS FecFact,
+                                                   SUM(F1.FctKilLot)      AS KilosFact,
+                                                   SUM(F1.FctSacEmb)      AS SacosFact,
+                                                   SUM(F1.FctKilLot / 70.) AS SacFact70
+                                            FROM FCTFACC2 F1
+                                            LEFT JOIN FCTFACCA F2 ON F1.FctNum = F2.FctNum
+                                            WHERE F1.CiaCod = 10 AND 
+                                                  F2.CiaCod = 10 AND
+                                                  F1.FctLotAnu <> 'S'
+                                            GROUP BY F1.FctLot")
+  
+  fact_margenes <- Consulta("SELECT LOTE AS CLLotCod,
+                                    SUM(MARGEN)     AS Margen,
+                                    SUM(SACOS70) AS SacosPYG
+                            FROM   CRMNALMARLOT
+                            GROUP  BY LOTE")
+  
+  bind_rows(fact_sys_nal, fact_sys_ext) %>% 
     left_join(fact_margenes, by = "CLLotCod") %>%
     filter(FecFact >= as.Date("2020-01-01")) %>%
     mutate(Facturado = TRUE, FecFact = as.Date(FecFact))
@@ -193,7 +202,6 @@ cargar_fact <- function() {
   }
   bases[[1L]]
 }
-
 # Navega la estructura de carpetas OneDrive y carga los archivos PYG mas recientes
 cargar_margenes_onedrive <- function(usuario, id_carpeta_raiz) {
   # Carpeta del ano mas reciente
@@ -212,8 +220,6 @@ cargar_margenes_onedrive <- function(usuario, id_carpeta_raiz) {
     select(name, id)
   if (nrow(mes) == 0L) { message("No se encontro carpeta de mes"); return(NULL) }
   
-  mes <- list(id = "014N3L2U4XJXKNNKMIABGYSFTPLCXSWZG2") # Marzo
-  
   # Archivos PYG disponibles en el mes mas reciente
   pyg_files <- ListarContenidoCarpetaId(usuario, mes$id) %>%
     filter(grepl(
@@ -225,8 +231,6 @@ cargar_margenes_onedrive <- function(usuario, id_carpeta_raiz) {
     message("No se encontraron archivos PYG en: ", mes$name)
     return(NULL)
   }
-  
-  pyg_files <- pyg_files[c(1,3),]
   
   if (nrow(pyg_files) != 2L) {
     stop(sprintf(
@@ -307,6 +311,8 @@ NITPPAL <- Consulta("SELECT DISTINCT FecProceso, CLCliNit AS PerCod, CliNitPpal 
   select(-FecProceso)
 
 # Datos maestros de clientes desde sistema transaccional
+CREACION <- ConsultaSistema("syscafe", "SELECT DISTINCT PerCod, PerFecCre from NPERSONA")
+
 NCLIENTE <- ConsultaSistema("syscafe", 
                             query = "SELECT c.CliNit AS PerCod, c.CliCont, c.CliDir,
                                             c.CliDir1, c.CliTel, c.CliConCom, c.CliTelCom,
@@ -329,8 +335,7 @@ ped <- ConsultaSistema("syscafe",
                                  INNER  JOIN EXPPEDID pd ON p1.PdcCod = pd.PdcCod
                                  LEFT   JOIN NUNIMEDI um ON pd.UMeCod  = um.UMeCod
                                  WHERE  p1.CiaCod = 10 AND pd.CiaCod = 10
-                                   AND  pd.CliNit <> 32 AND pd.PdcEst = 'A'
-                                   AND  pd.PdcVtaNal = 1")
+                                   AND  pd.CliNit <> 32 AND pd.PdcEst = 'A'")
 
 # Cuadro de lotes con carga incremental (activos + congelados del cache)
 datos_previos <- tryCatch(
@@ -347,19 +352,44 @@ lotes_raw <- cargar_lotes_incremental(datos_previos)
 fact <- cargar_fact()
 
 # Facturas historicas consolidadas por cliente (para indicadores globales)
-FACT <- ConsultaSistema("syscafe",
-                         query = "SELECT F2.FctNit,
-                                         MIN(F2.FcnFec) AS MinFecFact,
-                                         MAX(F2.FcnFec) AS UltFecFact,
-                                         SUM(F1.FcnKilLot)      AS KilosFact,
-                                         SUM(F1.FcnSacLot)      AS SacosFact,
-                                         SUM(F1.FcnKilLot / 70) AS SacFact70
-                                 FROM   FCTFACN1 F1
-                                 LEFT   JOIN FCTFACNA F2 ON F1.FcnNum = F2.FcnNum
-                                 WHERE  F1.CiaCod = 10 AND F2.CiaCod = 10 AND F2.FcnEtd = 'C'
-                                 GROUP  BY F2.FctNit") %>%
-  left_join(NCLIENTE %>% select(PerCod, PerRazSoc) %>% distinct(),
-            by = c("FctNit" = "PerCod"))
+FACT <- bind_rows(ConsultaSistema("syscafe",
+                                   query = "SELECT F2.FctNit,
+                                                   MIN(F2.FcnFec)          AS MinFecFact,
+                                                   MAX(F2.FcnFec)          AS UltFecFact,
+                                                   SUM(F1.FcnKilLot)       AS KilosFact,
+                                                   SUM(F1.FcnSacLot)       AS SacosFact,
+                                                   SUM(F1.FcnKilLot / 70.) AS SacFact70
+                                           FROM FCTFACN1 F1
+                                           INNER JOIN FCTFACNA F2 ON F1.FcnNum = F2.FcnNum AND 
+                                                                     F1.CiaCod = F2.CiaCod
+                                           WHERE F1.CiaCod = 10 AND 
+                                                 F2.FcnEtd = 'C'
+                                           GROUP BY F2.FctNit"),
+                  ConsultaSistema("syscafe",
+                            query = "SELECT F2.FctNit,
+                                            MIN(F2.FctFec)          AS MinFecFact,
+                                            MAX(F2.FctFec)          AS UltFecFact,
+                                            SUM(F1.FctKilLot)       AS KilosFact,
+                                            SUM(F1.FctSacEmb)       AS SacosFact,
+                                            SUM(F1.FctKilLot / 70.) AS SacFact70
+                                     FROM FCTFACC2 F1
+                                     INNER JOIN FCTFACCA F2 ON F1.FctNum = F2.FctNum AND 
+                                                               F1.CiaCod = F2.CiaCod
+                                     WHERE F1.CiaCod = 10
+                                     GROUP BY F2.FctNit")
+                  ) %>%
+  group_by(FctNit) %>%
+  summarise(MinFecFact = min(MinFecFact, na.rm = TRUE),
+            UltFecFact = max(UltFecFact, na.rm = TRUE),
+            KilosFact  = sum(KilosFact,  na.rm = TRUE),
+            SacosFact  = sum(SacosFact,  na.rm = TRUE),
+            SacFact70  = sum(SacFact70,  na.rm = TRUE),
+            .groups = "drop") %>%
+  left_join(NCLIENTE %>%
+              select(PerCod, PerRazSoc) %>%
+              distinct(),
+            by = c("FctNit" = "PerCod")) %>% 
+  left_join(CREACION,  by = c("FctNit" = "PerCod") )
 
 # Construccion del cuadro de datos principal
 data <- lotes_raw %>%
@@ -367,13 +397,10 @@ data <- lotes_raw %>%
   left_join(NITPPAL, by = c("CLCliNit" = "PerCod")) %>%
   mutate(CliNitPpal = ifelse(is.na(CliNitPpal), CLCliNit, CliNitPpal)) %>%
   # Solo NITs principales para evitar duplicados por subsidiarias
-  left_join(
-    NCLIENTE %>% filter(PerCod == CliNitPpal) %>% select(-PerCod),
-    by = "CliNitPpal"
-  ) %>%
+  left_join(NCLIENTE %>% filter(PerCod == CliNitPpal) %>% select(-PerCod),
+            by = "CliNitPpal") %>%
   left_join(ped, by = c("CLPdcCod" = "PdcCod", "CLPdcLin" = "PdcLin")) %>%
   left_join(fact, by = "CLLotCod") %>%
-  filter(LinNegCod == 21000L | (LinNegCod == 10000L & TipCaf != "E")) %>%
   mutate(MarKilo = Margen / KilosFact) %>%
   # Imputacion jerarquica de margen por kilo (4 niveles de agregacion)
   group_by(CLCliNit, CLLinNegNo, LinProCod, MCCod, MrcCod) %>%

@@ -86,17 +86,23 @@ dc_ppto_normalizar <- function(df, mes) {
 dc_metricas_cumpl <- function(df, mes_falt, lbl_acum) {
   df %>%
     mutate(
-      ConPpto        = ifelse(is.na(ConPpto), "SIN PRESUPUESTO", ConPpto),
+      ConPpto = if ("ConPpto" %in% names(df)) {
+        ifelse(is.na(ConPpto), "SIN PRESUPUESTO", ConPpto)
+      } else {
+        "SIN PRESUPUESTO"
+      },
       SacosCumpPpto  = pmax(
-        ((PptoSacosYTD - SacosYTD) + ((PptoSacos * 12) - PptoSacosYTD)) / mes_falt, 0
+        ((PptoSacosYTD - SacosYTD) +
+           ((PptoSacos * 12) - PptoSacosYTD)) / mes_falt, 0
       ),
       MargenCumpPpto = pmax(
-        ((PptoMargenYTD - MargenYTD) + ((PptoMargen * 12) - PptoMargenYTD)) / mes_falt, 0
+        ((PptoMargenYTD - MargenYTD) +
+           ((PptoMargen * 12) - PptoMargenYTD)) / mes_falt, 0
       ),
-      SacosMes       = ifelse(is.na(SacosMes),  0, SacosMes),
-      MargenMes      = ifelse(is.na(MargenMes),  0, MargenMes),
-      SacosYTD       = ifelse(is.na(SacosYTD),   0, SacosYTD),
-      MargenYTD      = ifelse(is.na(MargenYTD),  0, MargenYTD),
+      SacosMes  = ifelse(is.na(SacosMes),  0, SacosMes),
+      MargenMes = ifelse(is.na(MargenMes), 0, MargenMes),
+      SacosYTD  = ifelse(is.na(SacosYTD),  0, SacosYTD),
+      MargenYTD = ifelse(is.na(MargenYTD), 0, MargenYTD),
       CumpSacosMes   = SacosMes  / PptoSacos,
       CumpMargenMes  = MargenMes / PptoMargen,
       CumpSacosYTD   = SacosYTD  / PptoSacosYTD,

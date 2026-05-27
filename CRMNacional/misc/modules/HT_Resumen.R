@@ -1,4 +1,3 @@
-# HT_Resumen ----
 ResumenTotalUI <- function(id) {
   ns <- NS(id)
   
@@ -48,7 +47,7 @@ ResumenTotalUI <- function(id) {
     )
   )
 }
-ResumenTotal <- function(id, dat, dat_t, dat_c, dat_leads, dat_oportunidades, dat_competencia, clientes_raw,
+ResumenTotal <- function(id, dat, dat_t, dat_c, dat_leads, dat_oportunidades, dat_competencia, clientes_raw, fec,
                          usr, trigger_update) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
@@ -181,8 +180,7 @@ ResumenTotal <- function(id, dat, dat_t, dat_c, dat_leads, dat_oportunidades, da
       n_distinct(dat_competencia()$Competencia)
     })
     val_cohorte <- reactive({
-      aux <- dat() %>% filter(PptoSacos >= 0, year(FecFact) == year(max(FecFact)))
-      n_distinct(aux$CliNitPpal, aux$LinNegCod)
+      n_distinct(segr_corte()$CliNitPpal, segr_corte()$LinNegCod)
     })
     
     # Reactivos KPI presupuesto — derivados de datos_grafico via Presupuesto internals ----
@@ -250,14 +248,14 @@ ResumenTotal <- function(id, dat, dat_t, dat_c, dat_leads, dat_oportunidades, da
     })
     
     # Registro de modulos de detalle con dataframes pre-filtrados ----
-    DetalleCliente(          id = "detalle_activas",   dat = df_activas,   usr, trigger_update)
-    DetalleClienteRecuperar( id = "detalle_recuperar", dat = df_recuperar, usr, trigger_update)
-    DetalleClienteNuevo(     id = "detalle_nuevas",    dat = df_nuevas,    usr, trigger_update)
-    DashboardLeads(          id = "detalle_leads",          dat_leads)
-    DashboardOportunidades(  id = "detalle_oportunidades",  dat_oportunidades, usr)
-    Cohortes(                id = "detalle_cohortes",       data_tx = dat_c)
-    DetalleCompetencia(      id = "detalle_competencia")
-    Presupuesto(             id = "detalle_presupuesto",    dat_t, clientes_raw)
+    DetalleCliente         (id = "detalle_activas",   dat = df_activas,   usr, trigger_update)
+    DetalleClienteRecuperar(id = "detalle_recuperar", dat = df_recuperar, usr, trigger_update)
+    DetalleClienteNuevo    (id = "detalle_nuevas",    dat = df_nuevas,    usr, trigger_update)
+    DashboardLeads         (id = "detalle_leads", dat_leads)
+    DashboardOportunidades (id = "detalle_oportunidades",  dat_oportunidades, usr)
+    Cohortes               (id = "detalle_cohortes", data_tx = dat_t)
+    DetalleCompetencia     (id = "detalle_competencia")
+    Presupuesto            (id = "detalle_presupuesto", dat_t, clientes_raw)
     
     # Cajas KPI presupuesto ----
     CajaModal("kpi_cumpl_sacos",
@@ -398,8 +396,8 @@ ResumenTotal <- function(id, dat, dat_t, dat_c, dat_leads, dat_oportunidades, da
               icono_modal   = "arrows-to-eye",
               contenido_modal = function() CohortesUI(ns("detalle_cohortes")),
               footer = reactive(paste0(
-                "Clientes presupuestados con facturaci\u00f3n en ", periodo_r(),
-                " incluidos en el an\u00e1lisis de retenci\u00f3n por cohorte."
+                "UC presentes en la segmentaci\u00f3n Racafe al ",
+                format(corte_mes(), "%d/%m/%Y"), "."
               )),
               footer_class = "caja-modal-footer"
     )

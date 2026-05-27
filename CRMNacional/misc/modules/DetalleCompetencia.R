@@ -344,7 +344,7 @@ DetalleCompetencia <- function(id) {
       
       if (nrow(nuevos_registros) > 0) {
         tryCatch({
-          SubirDatos(nuevos_registros, "CRMNALCOMPETENCIAPRECIOS")
+          racafe::AgregarDatos(nuevos_registros, "CRMNALCOMPETENCIAPRECIOS")
           
           # Recargar tabla histórica y por ende ambas tablas
           rv$tabla_historica <- CargarDatos("CRMNALCOMPETENCIAPRECIOS") %>%

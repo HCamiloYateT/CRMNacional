@@ -1,26 +1,3 @@
-# =============================================================================
-# Módulo: Consulta Individual de Cliente — CRM Nacional Racafé
-# Submódulos:
-#   · IndContacto      → Tabla de contacto (KPIs en el orquestador vía CajaModal)
-#   · IndHistorico     → Serie histórica de facturación mensual
-#   · IndParticipacion → Treemap jerárquico Categoría > Producto
-#   · IndPendientes    → Lotes pendientes con asignación de orden de compra
-#   · IndRFM           → Análisis RFM, CLV estimado y predicción de churn
-#   · IndFormulario    → Edición CRM (incluye CliNitPpal)
-#   · IndNotas         → Historial de notas CRM
-#   · IndOportunidades → Pipeline de oportunidades y leads
-#   · IndBenchmark     → Comparativo vs pares del mismo segmento
-#   · IndEstacionalidad→ Heatmap de compras por mes × año
-#   · [Presupuesto]    → Módulo externo de seguimiento vs presupuesto
-# Layout (6 filas):
-#   F1: KPIs históricos globales (CajaModal × 4, status white)
-#   F2: KPIs YTD + MTD          (CajaModal × 4, status white)
-#   F3: col-4 [Contacto + Form] · col-8 [Pendientes]
-#   F4: col-8 [Histórico]       · col-4 [Treemap]
-#   F5: Presupuesto (full, colapsado)
-#   F6: RFM & CLV (full, colapsado)
-#   F7+: Notas · Oportunidades · Benchmark · Estacionalidad
-# =============================================================================
 
 
 # Global — Catálogos y helpers ------------------------------------------------
@@ -614,7 +591,7 @@ IndFormulario <- function(id, identidad, dat, usr) {
     observeEvent(input$confirm_guardar, {
       req(isTRUE(input$confirm_guardar))
       tryCatch({
-        SubirDatos(construir_payload(), "CRMNALCLIENTE")
+        racafe::AgregarDatos(construir_payload(), "CRMNALCLIENTE")
         showNotification("Datos guardados exitosamente.", type = "message")
         refresh(refresh() + 1L)
       }, error = function(e) {
@@ -674,7 +651,7 @@ IndNotas <- function(id, identidad, usr) {
                            CliNitPpal = id_val$nit,
                            Nota = trimws(input$nota_texto), stringsAsFactors = FALSE)
       tryCatch({
-        SubirDatos(nuevo, "CRMNALNOTAS")
+        racafe::AgregarDatos(nuevo, "CRMNALNOTAS")
         updateTextAreaInput(session, "nota_texto", value = "")
         refresh_notas(refresh_notas() + 1L)
         showNotification("Nota registrada.", type = "message")

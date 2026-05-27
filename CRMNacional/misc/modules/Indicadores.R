@@ -94,7 +94,6 @@ IndicadoresServer <- function(id, dat) {
       orden <- unname(.IND_NOMBRES_CORTOS)
       
       tabla <- dat() %>%
-        dplyr::select(-last_updated) %>%
         dplyr::mutate(Item = as.character(Item)) %>%
         dplyr::left_join(anterior_r(), by = "Item") %>%
         dplyr::mutate(

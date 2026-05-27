@@ -1,5 +1,4 @@
 server <- function(input, output, session) {
-  
   # Helpers ----
   
   # Niveles estándar de segmento analítico RFM
@@ -512,7 +511,7 @@ server <- function(input, output, session) {
         Producto   = ifelse(is.na(Producto)   | Producto   == "", "SIN DATO", Producto)
       )
   })
-  # [DEBUG] observeEvent(data_c(), { assign("BaseDatos_c", data_c(), envir = .GlobalEnv) })
+  observeEvent(data_c(), { assign("BaseDatos_c", data_c(), envir = .GlobalEnv) }) #[DEBUG] 
   
   ## data_t: filtro por dimensiones de negocio ----
   # Sin preloader: filter() puro sobre data_c() ya en memoria
@@ -894,6 +893,207 @@ server <- function(input, output, session) {
     )
   )
   
+  ### Clientes con información antigua ----
+  
+  # Clientes que tienen registro en CRMNALCLIENTE pero sin actualización
+  # en el año en curso, y con facturación en el año en curso.
+  clientes_info_antigua_r <- reactive({
+    
+    anho_actual <- year(Sys.Date())
+    
+    # Último registro CRM por cliente y línea — detecta el año del último proceso
+    crm_reciente <- clientes_raw_cache$get() %>%
+      dplyr::group_by(CliNitPpal, LinNegCod) %>%
+      dplyr::arrange(dplyr::desc(FecProceso)) %>%
+      dplyr::slice(1) %>%
+      dplyr::ungroup() %>%
+      dplyr::filter(year(FecProceso) < anho_actual) %>%
+      dplyr::select(CliNitPpal, LinNegCod, FecProceso,
+                    Segmento_crm = Segmento, Asesor_crm = Asesor)
+    
+    # Clientes con facturación en el año en curso
+    con_fact_anho <- datos_rv() %>%
+      dplyr::filter(year(FecFact) == anho_actual) %>%
+      dplyr::distinct(CliNitPpal, LinNegCod, PerRazSoc, CLLinNegNo)
+    
+    # Intersección: tienen registro antiguo Y han facturado este año
+    con_fact_anho %>%
+      dplyr::inner_join(crm_reciente, by = c("CliNitPpal", "LinNegCod")) %>%
+      dplyr::mutate(
+        label           = paste0(CLLinNegNo, " \u2014 ", PerRazSoc),
+        UltActualizacion = format(FecProceso, "%d %b %Y")
+      ) %>%
+      dplyr::arrange(label) %>%
+      dplyr::select(CliNitPpal, LinNegCod, PerRazSoc, CLLinNegNo,
+                    UltActualizacion, label)
+  })
+  
+  # reactiveVal de identidad independiente para no colisionar con cli_identidad_rv
+  cli_ant_identidad_rv <- reactiveVal(NULL)
+  
+  # Resumen del modal para "información antigua" — reutiliza lógica de resumen_cli_modal
+  # pero con identidad propia (cli_ant_identidad_rv) para aislamiento total
+  output$resumen_cli_ant_modal <- renderUI({
+    id_val <- cli_ant_identidad_rv()
+    req(!is.null(id_val), length(id_val$nit) == 1L, !is.na(id_val$nit))
+    
+    crm <- clientes_raw_cache$get() %>%
+      dplyr::filter(CliNitPpal == id_val$nit, LinNegCod == id_val$linneg_cod) %>%
+      dplyr::arrange(dplyr::desc(FecProceso)) %>%
+      dplyr::slice(1)
+    
+    dat_cli <- data_c() %>%
+      dplyr::filter(CliNitPpal == id_val$nit, LinNegCod == id_val$linneg_cod)
+    
+    cod_ultimo <- dat_cli %>%
+      dplyr::arrange(dplyr::desc(PdcFecCre)) %>%
+      dplyr::pull(CLPdcCod) %>%
+      dplyr::first()
+    
+    ultimo <- dat_cli %>% dplyr::filter(CLPdcCod == cod_ultimo)
+    
+    # Fecha de último proceso CRM — específico de este modal
+    ult_proceso <- if (nrow(crm) > 0) {
+      format(crm$FecProceso[1], "%d %b %Y")
+    } else "\u2014"
+    
+    segmento <- if (nrow(crm) > 0 && nzchar(crm$Segmento[1] %||% "")) {
+      crm$Segmento[1]
+    } else "\u2014"
+    asesor <- if (nrow(crm) > 0 && nzchar(crm$Asesor[1] %||% "")) {
+      crm$Asesor[1]
+    } else "\u2014"
+    ultima_fac <- tryCatch({
+      m <- max(dat_cli$FecFact, na.rm = TRUE)
+      if (is.infinite(m)) "\u2014" else format(m, "%d %b %Y")
+    }, error = function(e) "\u2014")
+    
+    if (nrow(ultimo) > 0) {
+      cod_pedido <- as.character(cod_ultimo %||% "\u2014")
+      fec_pedido <- tryCatch(
+        format(as.Date(ultimo$PdcFecCre[1]), "%d %b %Y"), error = function(e) "\u2014"
+      )
+      usr_pedido <- ultimo$Usuario[1] %||% "\u2014"
+      sacos_tot  <- format(
+        sum(ultimo$SacLote, na.rm = TRUE), big.mark = ".", decimal.mark = ","
+      )
+    } else {
+      cod_pedido <- fec_pedido <- usr_pedido <- sacos_tot <- "\u2014"
+    }
+    
+    .seccion <- function(label) {
+      tags$p(
+        style = paste0(
+          "font-size:10px; font-weight:700; color:#94A3B8; ",
+          "text-transform:uppercase; letter-spacing:0.05em; margin:0 0 6px;"
+        ),
+        label
+      )
+    }
+    
+    .item <- function(icono, label, valor) {
+      tags$div(
+        style = "display:flex; align-items:flex-start; gap:6px; margin-bottom:4px;",
+        tags$span(icon(icono), style = "color:#64748B; font-size:10px; width:13px; margin-top:1px;"),
+        tags$span(label, style = "font-size:11px; color:#64748B; min-width:90px; flex-shrink:0;"),
+        tags$span(valor, style = "font-size:11px; font-weight:600; color:#374151;")
+      )
+    }
+    
+    lotes_ui <- if (nrow(ultimo) > 0) {
+      items <- lapply(seq_len(nrow(ultimo)), function(i) {
+        f <- ultimo[i, ]
+        tags$div(
+          style = paste0(
+            "background:white; border:1px solid #E2E8F0; border-radius:4px;",
+            "padding:5px 8px; margin-bottom:4px;"
+          ),
+          tags$div(
+            style = "display:flex; justify-content:space-between; align-items:center;",
+            tags$div(
+              tags$span(
+                as.character(f$CLLotCod),
+                style = "font-size:11px; font-weight:700; color:#1E40AF;"
+              ),
+              tags$span(
+                paste0(" \u00b7 ", f$Categoria %||% "\u2014", " / ", f$Producto %||% "\u2014"),
+                style = "font-size:10px; color:#64748B;"
+              )
+            ),
+            tags$span(
+              paste0(format(f$SacLote, big.mark = ".", decimal.mark = ","), " sacos"),
+              style = "font-size:11px; font-weight:600; color:#374151;"
+            )
+          )
+        )
+      })
+      do.call(tagList, items)
+    } else {
+      tags$span("\u2014", style = "font-size:11px; color:#94A3B8;")
+    }
+    
+    tags$div(
+      style = paste0(
+        "background:#F8FAFC; border:1px solid #E2E8F0; border-radius:6px;",
+        "padding:12px 14px; margin-bottom:14px;"
+      ),
+      fluidRow(
+        column(4,
+               .seccion("Datos CRM"),
+               # Fecha de última actualización CRM — diferenciador clave vs modal de sin info
+               .item("clock",       "Últ. actualiz.:", ult_proceso),
+               .item("calendar",    "Última factura:", ultima_fac),
+               .item("layer-group", "Segmento:",       segmento),
+               .item("user",        "Asesor:",          asesor)
+        ),
+        column(4,
+               .seccion("Último pedido"),
+               .item("hashtag",        "Código:",     cod_pedido),
+               .item("calendar-plus",  "Creación:",   fec_pedido),
+               .item("user-pen",       "Usuario:",    usr_pedido),
+               .item("weight-hanging", "Sacos tot.:", sacos_tot)
+        ),
+        column(4,
+               .seccion(paste0("Lotes (", nrow(ultimo), ")")),
+               lotes_ui
+        )
+      )
+    )
+  })
+  
+  MenuHeaderServer(
+    id            = "MenuClientesAnt",
+    items_r       = clientes_info_antigua_r,
+    key_cols      = c("CliNitPpal", "LinNegCod", "PerRazSoc", "CLLinNegNo"),
+    badgeStatus_r = "warning",
+    headerText    = NULL,
+    href          = "#",
+    footerText    = "Ver clientes",
+    modal_icon    = "user-clock",
+    modal_size    = "l",
+    modal_pre_fn  = function(sel) {
+      nit <- suppressWarnings(as.numeric(sel$CliNitPpal))
+      lin <- suppressWarnings(as.numeric(sel$LinNegCod))
+      req(length(nit) == 1L, !is.na(nit))
+      cli_ant_identidad_rv(list(nit = nit, linneg_cod = lin))
+    },
+    modal_titulo_fn    = function(sel) paste0(sel$PerRazSoc, " \u2014 ", sel$CLLinNegNo),
+    modal_contenido_fn = function(sel) tagList(
+      uiOutput("resumen_cli_ant_modal"),
+      IndFormularioUI("mod_form_cli")          # reutiliza el mismo formulario
+    )
+  )
+  IndFormulario(
+    id        = "mod_form_cli_ant",
+    identidad = reactive(cli_ant_identidad_rv()),
+    dat       = reactive({
+      id_val <- cli_ant_identidad_rv()
+      req(!is.null(id_val), length(id_val$nit) == 1L, !is.na(id_val$nit))
+      data_c() %>%
+        dplyr::filter(CliNitPpal == id_val$nit, LinNegCod == id_val$linneg_cod)
+    }),
+    usr = usuario
+  )
   ### Productos sin información ----
   # productos_cache reemplaza CargarDatos("CRMNALPRODS") directo
   # nmarcom_cache / nmarcas_cache reemplazan dos ConsultaSistema sin cache
@@ -948,13 +1148,19 @@ server <- function(input, output, session) {
       ))
     },
     modal_titulo_fn    = function(sel) paste0(sel$MCNom, " / ", sel$Marca),
-    modal_contenido_fn = function(sel) ProdFormularioUI("mod_form_prod")
+    modal_contenido_fn = function(sel) tagList(
+      uiOutput("resumen_cli_ant_modal"),
+      IndFormularioUI("mod_form_cli_ant") 
+    )
   )
   
   # Módulos ----
   
   ## Encabezado ----
-  Cotizacion("Cotizador", usuario, data_c)
+  persona_r <- reactive({
+    Unicos(c(data_c()$PerRazSoc, data_leads_f()$PerRazSoc))
+  })
+  Cotizacion("Cotizador", usuario, data_c, persona_r)
   
   # data_not_modulo: filtro estricto por Responsable para el módulo de notificaciones
   # Nombre diferenciado respecto a data_not_header para evitar la colisión del original
@@ -981,6 +1187,7 @@ server <- function(input, output, session) {
     dat_oportunidades = data_oportunidades_f,
     dat_competencia   = data_competencia_f,
     clientes_raw      = clientes_raw,
+    fec               = reactive(input$FT_Fecha),
     usr               = usuario,
     trigger_update    = trigger_update_opt
   )

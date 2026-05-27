@@ -71,7 +71,7 @@ Contacto <- function(id, tit) {
         Comentarios = input$Comentarios
       )
       
-      SubirDatos(aux1, "CRMNALCONT")
+      racafe::AgregarDatos(aux1, "CRMNALCONT")
       shinyjs::reset("Comentarios")
       
       toastr_success(paste("Contacto almacenado exitosamente"))

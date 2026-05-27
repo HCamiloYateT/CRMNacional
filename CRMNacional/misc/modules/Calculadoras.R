@@ -506,7 +506,7 @@ CalculadoraPesosExcelso <- function(id, dat_ind, usr) {
     # Persistir márgenes en BD al calcular (solo usuarios autorizados)
     observeEvent(input$Calcular, {
       if (usr() %in% c("CMEDINA", "JGCANON")) {
-        SubirDatos(
+        racafe::AgregarDatos(
           data.frame(
             UsuarioCrea   = usr(),
             FechaHoraCrea = Sys.time(),
