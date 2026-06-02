@@ -522,7 +522,7 @@ IndFormulario <- function(id, identidad, dat, usr) {
       req(!is.null(id_val), length(id_val$nit) == 1L, !is.na(id_val$nit))
       refresh()
       CargarDatos("CRMNALCLIENTE") %>%
-        mutate(FecProceso = as.Date(FecProceso)) %>%
+        mutate(FecProceso = as_datetime(FecProceso)) %>%
         filter(CliNitPpal == id_val$nit, LinNegCod == id_val$linneg_cod) %>%
         arrange(desc(FecProceso)) %>%
         slice(1)
@@ -531,10 +531,10 @@ IndFormulario <- function(id, identidad, dat, usr) {
     # Poblar: prioridad registro CRM → BaseDatos → default
     observe({
       crm <- data_crm(); d <- dat()
-      nit_val   <- if (nrow(crm) > 0) crm$CliNitPpal[1]       else d$CliNitPpal[1]
-      asesor_val <- if (nrow(crm) > 0) crm$Asesor[1]    %||% "" else d$Asesor[1]    %||% ""
-      seg_val    <- if (nrow(crm) > 0) crm$Segmento[1]  %||% "" else d$Segmento[1]  %||% ""
-      exc_val    <- if (nrow(crm) > 0) crm$Excluir[1]   %||% "NO" else "NO"
+      nit_val   <- if (nrow(crm) > 0) crm$CliNitPpal[1] else d$CliNitPpal[1]
+      asesor_val <- if (nrow(crm) > 0) crm$Asesor[1] %||% "" else d$Asesor[1]    %||% ""
+      seg_val    <- if (nrow(crm) > 0) crm$Segmento[1] %||% "" else d$Segmento[1]  %||% ""
+      exc_val    <- if (nrow(crm) > 0) crm$Excluir[1] %||% "NO" else "NO"
       meses_val  <- if (nrow(crm) > 0) crm$NumMesesRecuperar[1] %||% 3L else 3L
       
       updateTextInput(session,        "frm_CliNitPpal",        value    = as.character(nit_val %||% ""))
@@ -556,7 +556,7 @@ IndFormulario <- function(id, identidad, dat, usr) {
       nit_final <- if (!is.na(nit_num) && nit_num > 0) nit_num else id_val$nit
       
       data.frame(
-        FecProceso        = as.character(Sys.Date()),
+        FecProceso        = Sys.time(),
         Usr               = usr(),
         LinNegCod         = id_val$linneg_cod,
         CLCliNit          = id_val$nit,    # NIT pedido — no editable
