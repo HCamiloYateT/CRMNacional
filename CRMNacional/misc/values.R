@@ -1,3 +1,16 @@
+## Usuarios ----
+.MAP_USUARIO_ASESOR <- c(
+  "JGCANON"     = "JONATHAN CAÑON",
+  "JAAGUILAR"   = "ALEJANDRO AGUILAR",
+  "AYVARGAS"    = "ANDREA VARGAS",
+  "ASESORVALLE" = "ASESORVALLE",
+  "CMEDINA"     = "CARLOS MEDINA",
+  "ERESTREPO"   = "EDUARDO RESTREPO",
+  "GCORREDOR"   = "GUSTAVO CORREDOR",
+  "LABOYACA"    = "LUIS BOYACÁ",
+  "TRESTREPO"   = "TOMÁS RESTREPO"
+)
+
 ## Choices Listas Desplegables ------
 Choices <- function() {
   

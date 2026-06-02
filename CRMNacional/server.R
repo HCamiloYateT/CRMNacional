@@ -133,7 +133,12 @@ server <- function(input, output, session) {
   
   # Captura del usuario con fallback para desarrollo local
   usuario <- reactive({
-    if (is.null(session$user)) "JGCANON" else str_to_upper(session$user)
+    
+    login <- if (is.null(session$user)) "JGCANON" else str_to_upper(session$user)
+    nombre <- .MAP_USUARIO_ASESOR[login]
+    # Fallback: si el login no está mapeado, devuelve el login mismo
+    if (is.na(nombre)) login else unname(nombre)
+    
   })
   
   filtros <- FiltrosServer("Filtros", usuario, productos_cache)
@@ -510,6 +515,16 @@ server <- function(input, output, session) {
   
   ## data_t: filtro por dimensiones de negocio ----
   # Sin preloader: filter() puro sobre data_c() ya en memoria
+  observe({
+    f <- filtros()
+    message("=== FILTROS DEBUG ===")
+    message("f$asesor:    ", paste(f$asesor,    collapse = ",") %||% "NULL")
+    message("f$segmento:  ", paste(f$segmento,  collapse = ",") %||% "NULL")
+    message("f$linneg:    ", paste(f$linneg,     collapse = ",") %||% "NULL")
+    message("f$categoria: ", paste(f$categoria,  collapse = ",") %||% "NULL")
+    message("f$producto:  ", paste(f$producto,   collapse = ",") %||% "NULL")
+    message("data_c nrow: ", tryCatch(nrow(data_c()), error = function(e) paste("ERROR:", e$message)))
+  })
   data_t <- reactive({
     f <- filtros()
     req(data_c(), f$asesor, f$segmento, f$linneg, f$categoria, f$producto)
@@ -1448,14 +1463,16 @@ server <- function(input, output, session) {
   Competencia("Competencia", data_ind, usuario)
   GestionProducto("Productos", data_c, usuario)
   
-  # ## Cuerpo ----
-  # 
-  # ### Hoja de trabajo ----
-  # ResumenTotal(id = "ResumenTotal", dat = data_f, dat_t = data_t, dat_c = data_c,
-  #              dat_leads = data_leads_f, dat_oportunidades = data_oportunidades_f, 
-  #              dat_competencia = data_competencia_f, clientes_raw = clientes_raw,
-  #              data_cohortes = data_cohortes, fec = reactive(input$FT_Fecha), 
-  #              usr = usuario, trigger_update    = trigger_update_opt)
+  ## Cuerpo ----
+
+  ### Hoja de trabajo ----
+  ResumenTotal(id = "ResumenTotal", 
+               dat = data_f, dat_t = data_t, dat_c = data_c,
+               dat_leads = data_leads_f, dat_oportunidades = data_oportunidades_f, 
+               dat_competencia = data_competencia_f, clientes_raw = clientes_raw,
+               data_cohortes = data_cohortes, segmentos_raw = reactive(segmentos_raw_cache$get()),
+               fact_r = fact_rv, 
+               usr = usuario, trigger_update = trigger_update_opt)
   # ComparacionIndicadores("CompIndicadores", data_ind)
   # Calculadora("Calculadoras",     data_ind, usuario)
   # Presupuesto("PresupuestoTotal", data_t,   clientes_raw)
@@ -1550,7 +1567,7 @@ server <- function(input, output, session) {
   #     setNames(c("LinNegCod", "CliNitPpal", "Antes", "Ahora")) %>%
   #     filter(Antes %in% c("CLIENTE", NA) & Ahora == "CLIENTE A RECUPERAR") %>%
   #     select(LinNegCod, CliNitPpal)
-  #   
+  # 
   #   aux2 <- data_f() %>%
   #     inner_join(aux1, by = join_by(LinNegCod, CliNitPpal)) %>%
   #     group_by(PerRazSoc, LineaNegocio = CLLinNegNo, Segmento) %>%
@@ -1634,7 +1651,7 @@ server <- function(input, output, session) {
   #   clientes_raw = clientes_raw,
   #   dat_global   = data_c
   # )
-  # 
+
   # Footer ----
   output$last_update_info <- renderText({
     updates    <- map_dbl(all_caches, ~ as.numeric(.$last_update()))
