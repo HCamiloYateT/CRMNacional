@@ -1,29 +1,28 @@
 # Control de Vista ----
-.spec_cajas_resumen <- list(list(seccion   = "Presupuesto",
-                                 icono_sec = "file-invoice-dollar",
-                                 cajas     = list(list(id = "kpi_cumpl_sacos",   columnas = 3L),
-                                                  list(id = "kpi_cumpl_margen",  columnas = 3L))
-                                 ),
-                            list(seccion   = "Unidades Comerciales",
-                                 icono_sec = "users",
-                                 cajas     = list(list(id = "kpi_activas",   columnas = 4L),
-                                                  list(id = "kpi_recuperar", columnas = 4L),
-                                                  list(id = "kpi_nuevas",    columnas = 4L))
-                                 ),
-                            list(seccion   = "Actividad Comercial",
-                                 icono_sec = "bullseye",
-                                 cajas     = list(list(id = "kpi_leads",         columnas = 3L),
-                                                  list(id = "kpi_oportunidades", columnas = 3L),
-                                                  list(id = "kpi_cohorte",       columnas = 3L),
-                                                  list(id = "kpi_competencia",   columnas = 3L)
-                                                  )
-                                 )
-                            )
+.spec_cajas_resumen <- list(
+  list(seccion   = "Presupuesto",
+       icono_sec = "file-invoice-dollar",
+       cajas     = list(list(id = "kpi_cumpl_sacos",  columnas = 3L),
+                        list(id = "kpi_cumpl_margen", columnas = 3L))
+  ),
+  list(seccion   = "Unidades Comerciales",
+       icono_sec = "users",
+       cajas     = list(list(id = "kpi_activas",   columnas = 4L),
+                        list(id = "kpi_recuperar", columnas = 4L),
+                        list(id = "kpi_nuevas",    columnas = 4L))
+  ),
+  list(seccion   = "Actividad Comercial",
+       icono_sec = "bullseye",
+       cajas     = list(list(id = "kpi_leads",         columnas = 3L),
+                        list(id = "kpi_oportunidades", columnas = 3L),
+                        list(id = "kpi_cohorte",       columnas = 3L),
+                        list(id = "kpi_competencia",   columnas = 3L))
+  )
+)
 
-# Modulo ----
+# Módulo ----
 ResumenTotalUI <- function(id) {
   ns <- NS(id)
-  # Separador visual de sección
   .seccion_ui <- function(titulo, icono) {
     tags$div(
       style = paste0(
@@ -32,16 +31,12 @@ ResumenTotalUI <- function(id) {
         "border-bottom:2px solid #E2E8F0;"
       ),
       tags$span(style = "color:#64748B; font-size:13px;", icon(icono)),
-      tags$span(
-        titulo,
-        style = paste0(
-          "font-size:13px; font-weight:700; color:#374151; ",
-          "letter-spacing:0.03em; text-transform:uppercase;"
-        )
-      )
+      tags$span(titulo, style = paste0(
+        "font-size:13px; font-weight:700; color:#374151; ",
+        "letter-spacing:0.03em; text-transform:uppercase;"
+      ))
     )
   }
-  # UI generada desde la especificación — no hardcodear cajas aquí
   bloques <- purrr::map(.spec_cajas_resumen, function(sec) {
     tagList(
       .seccion_ui(sec$seccion, sec$icono_sec),
@@ -54,10 +49,25 @@ ResumenTotal <- function(id, dat, dat_t, dat_c, dat_leads, dat_oportunidades, da
                          clientes_raw, data_cohortes, segmentos_raw, fact_r, usr, trigger_update) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
+    observe({
+      ids_plotly <- c(
+        paste0(ns("detalle_activas-factmes")),
+        paste0(ns("detalle_activas-conppto")),
+        paste0(ns("detalle_activas-meses")),
+        paste0(ns("detalle_recuperar-segmento")),
+        paste0(ns("detalle_recuperar-conppto")),
+        paste0(ns("detalle_recuperar-meses")),
+        paste0(ns("detalle_nuevas-segmento")),
+        paste0(ns("detalle_nuevas-linneg")),
+        paste0(ns("detalle_nuevas-bucketsacos"))
+      )
+      session$userData$.plotlyShinyEventIDs <- unique(c(
+        session$userData$.plotlyShinyEventIDs, ids_plotly
+      ))
+    }, priority = 1000L)
     
     # Helpers ----
     
-    # Nombre del mes en español
     .mes_es <- function(fecha) {
       meses <- c(
         "enero", "febrero", "marzo", "abril", "mayo", "junio",
@@ -66,7 +76,6 @@ ResumenTotal <- function(id, dat, dat_t, dat_c, dat_leads, dat_oportunidades, da
       paste(meses[month(fecha)], year(fecha))
     }
     
-    # Semáforo de fondo para KPIs de cumplimiento porcentual
     .fondo_cumpl <- function(v) {
       dplyr::case_when(
         is.na(v)  ~ "white",
@@ -77,7 +86,7 @@ ResumenTotal <- function(id, dat, dat_t, dat_c, dat_leads, dat_oportunidades, da
       )
     }
     
-    # Helper: registra CajaModal con defaults comunes del landing (UC y comercial)
+    # Registra CajaModal con defaults comunes para cajas de conteo entero
     .caja_std <- function(id, valor_r, texto, icono, footer_r, ui_modal_fn,
                           titulo_modal, icono_modal = icono) {
       CajaModal(
@@ -97,22 +106,29 @@ ResumenTotal <- function(id, dat, dat_t, dat_c, dat_leads, dat_oportunidades, da
     }
     
     # Reactivos base ----
-    # Corte: primer día del mes en curso
+    
     corte_mes <- reactive({ PrimerDia(Sys.Date()) })
     
-    # Snapshot de segmentos en el corte, enriquecido con dimensiones del filtro.
-    # segmentos_raw viene del server (segmentos_raw_cache) — sin carga adicional a BD.
-    segr_corte <- reactive({
-      linneg_activos <- tryCatch(
-        dat_t() %>% pull(LinNegCod) %>% unique(),
-        error = function(e) NULL
-      )
-      req(!is.null(linneg_activos), length(linneg_activos) > 0)
-      segmentos_raw() %>%
-        filter(FecProceso == corte_mes(), LinNegCod %in% linneg_activos)
+    # Universo dimensional activo — fuente única de verdad para todos los filtros.
+    # universo_nits : para UC (tienen CliNitPpal en los datos transaccionales)
+    # universo_razsoc: para actividad comercial (leads/oportunidades usan PerRazSoc)
+    universo_nits <- reactive({
+      dat_t() %>% select(LinNegCod, CliNitPpal) %>% distinct()
+    })
+    universo_razsoc <- reactive({
+      dat_t() %>% select(LinNegCod, PerRazSoc) %>% distinct()
     })
     
-    # NITs con registro en CRMNALSEGR en el corte — para detección de nuevos
+    # Snapshot CRMNALSEGR al corte, cruzado contra universo_nits.
+    # Aplica Asesor + Segmento + LinNeg heredados de dat_t().
+    segr_corte <- reactive({
+      req(nrow(universo_nits()) > 0)
+      segmentos_raw() %>%
+        filter(FecProceso == corte_mes()) %>%
+        semi_join(universo_nits(), by = c("LinNegCod", "CliNitPpal"))
+    })
+    
+    # Referencia histórica global del corte — sin cruzar con universo (para nuevos)
     nits_segr_corte <- reactive({
       segmentos_raw() %>%
         filter(FecProceso == corte_mes()) %>%
@@ -120,15 +136,17 @@ ResumenTotal <- function(id, dat, dat_t, dat_c, dat_leads, dat_oportunidades, da
         distinct()
     })
     
-    # NITs con factura antes del mes vigente — usa fact_r (reactiveVal del server)
+    # Historial de facturación anterior al mes vigente — usa FACT global (DataPrep).
+    # CORRECCIÓN: fact_r() = fact_cache está colapsado por CLLotCod, no por FctNit.
+    # FACT tiene MinFecFact y FctNit agrupados por cliente.
     nits_fact_antes_mes <- reactive({
-      fact_r() %>%
-        filter(as.Date(FecPrimerFact) < corte_mes()) %>%
+      FACT %>%
+        filter(as.Date(MinFecFact) < corte_mes()) %>%
         select(CliNitPpal = FctNit) %>%
         distinct()
     })
     
-    # UCs con transacción en el mes corrido
+    # UCs con transacción en el mes corrido — dat() hereda filtros de dat_t()
     nits_mes_corrido <- reactive({
       dat() %>%
         filter(PrimerDia(FecFact) == corte_mes()) %>%
@@ -136,7 +154,8 @@ ResumenTotal <- function(id, dat, dat_t, dat_c, dat_leads, dat_oportunidades, da
         distinct()
     })
     
-    # Dataframes de UC — fuente única de verdad para conteo y drill-down ----
+    # Dataframes de UC ----
+    # Fuente única de verdad para conteo Y drill-down; sin re-filtro en módulos hijos.
     
     df_activas <- reactive({
       nits <- segr_corte() %>%
@@ -154,45 +173,60 @@ ResumenTotal <- function(id, dat, dat_t, dat_c, dat_leads, dat_oportunidades, da
     
     df_nuevas <- reactive({
       nits <- nits_mes_corrido() %>%
-        anti_join(nits_segr_corte(),    by = c("LinNegCod", "CliNitPpal")) %>%
+        anti_join(nits_segr_corte(),     by = c("LinNegCod", "CliNitPpal")) %>%
         anti_join(nits_fact_antes_mes(), by = "CliNitPpal")
       dat_c() %>% semi_join(nits, by = c("LinNegCod", "CliNitPpal"))
     })
     
-    # Conteos derivados — única fuente de verdad numérica ----
+    # Dataframes de actividad comercial ----
+    # Leads: dat_leads() ya filtró por LinNegCod/Segmento/Asesor en server.R.
+    # El semi_join aquí garantiza consistencia si el universo cambia en sesión.
+    df_leads <- reactive({
+      dat_leads() %>%
+        semi_join(universo_razsoc(), by = c("PerRazSoc", "LinNegCod"))
+    })
+    
+    # Oportunidades: dat_oportunidades() ya hizo inner_join con dims en server.R.
+    # El semi_join refuerza el cruce por PerRazSoc + LinNegCod.
+    df_oportunidades <- reactive({
+      dat_oportunidades() %>%
+        semi_join(universo_razsoc(), by = c("PerRazSoc", "LinNegCod"))
+    })
+    
+    # Competencia: CRMNALCOMPETENCIA solo tiene PerRazSoc; filtro por %in%.
+    df_competencia <- reactive({ dat_competencia() })
+    
+    # Cohorte: panel_full filtrado al mes vigente y al universo activo.
+    # El conteo del KPI usa solo cliente_id distintos en el mes vigente.
+    df_cohorte <- reactive({
+      d <- data_cohortes()
+      req(!is.null(d), !is.null(d$panel_full), !is.null(d$mes_vigente))
+      nits_activos <- universo_nits() %>% pull(CliNitPpal) %>% unique()
+      d$panel_full %>%
+        filter(ym == d$mes_vigente, CliNitPpal %in% nits_activos) %>%
+        distinct(cliente_id)
+    })
+    
+    # Conteos — única fuente numérica para KPI y drill-down ----
     val_activas   <- reactive({ n_distinct(df_activas()$LinNegCod,   df_activas()$CliNitPpal) })
     val_recuperar <- reactive({ n_distinct(df_recuperar()$LinNegCod, df_recuperar()$CliNitPpal) })
     val_nuevas    <- reactive({ n_distinct(df_nuevas()$LinNegCod,    df_nuevas()$CliNitPpal) })
-    
-    val_leads <- reactive({ n_distinct(dat_leads()$PerRazSoc) })
+    val_leads     <- reactive({ n_distinct(df_leads()$PerRazSoc) })
     
     val_oportunidades <- reactive({
       n_distinct(
-        dat_oportunidades()$LinNegCod, dat_oportunidades()$CliNitPpal,
-        dat_oportunidades()$Categoria, dat_oportunidades()$Producto
+        df_oportunidades()$LinNegCod, df_oportunidades()$PerRazSoc,
+        df_oportunidades()$Categoria, df_oportunidades()$Producto
       )
     })
     
-    val_competencia <- reactive({ n_distinct(dat_competencia()$Competencia) })
+    val_competencia <- reactive({ n_distinct(df_competencia()$Competencia) })
+    val_cohorte     <- reactive({ nrow(df_cohorte()) })
     
-    val_cohorte <- reactive({
-      dat <- data_cohortes()
-      req(!is.null(dat), !is.null(dat$panel_full), !is.null(dat$mes_vigente))
-      dat$panel_full %>%
-        filter(ym == dat$mes_vigente) %>%
-        distinct(cliente_id) %>%
-        nrow()
-    })
-    
-    # KPIs de presupuesto — agregación YTD sobre reactivos ya en memoria ----
-    # dat()         = data_f  (facturas filtradas)
-    # dat_t()       = data_t  (universo dimensional, sin filtro de fecha)
-    # clientes_raw()= clientes_raw_cache$get()
-    # No se hace ninguna carga a BD aquí.
+    # KPIs de presupuesto YTD ----
     
     periodo_r <- reactive({ year(max(dat()$FecFact, na.rm = TRUE)) })
     
-    # Ejecución YTD: sacos y margen acumulados hasta el mes actual desde dat()
     ejec_ytd_r <- reactive({
       mes <- month(Sys.Date())
       dat() %>%
@@ -208,7 +242,6 @@ ResumenTotal <- function(id, dat, dat_t, dat_c, dat_leads, dat_oportunidades, da
         )
     })
     
-    # Presupuesto YTD: desde clientes_raw ya en memoria — sin CargarDatos adicional
     ppto_ytd_r <- reactive({
       mes <- month(Sys.Date())
       clientes_raw() %>%
@@ -227,7 +260,6 @@ ResumenTotal <- function(id, dat, dat_t, dat_c, dat_leads, dat_oportunidades, da
         )
     })
     
-    # KPIs de cumplimiento compuestos ----
     kpi_cumpl_sacos_r <- reactive({
       e <- ejec_ytd_r(); p <- ppto_ytd_r()
       list(
@@ -251,14 +283,15 @@ ResumenTotal <- function(id, dat, dat_t, dat_c, dat_leads, dat_oportunidades, da
     })
     
     # Registro de módulos hijos ----
-    DetalleCliente(         "detalle_activas",        df_activas,   usr, trigger_update)
-    DetalleClienteRecuperar("detalle_recuperar",      df_recuperar, usr, trigger_update)
-    DetalleClienteNuevo(    "detalle_nuevas",         df_nuevas,    usr, trigger_update)
-    DashboardLeads(         "detalle_leads",          dat_leads)
-    DashboardOportunidades( "detalle_oportunidades",  dat_oportunidades, usr)
-    Cohortes(               "detalle_cohortes",       data_cohortes)
+    # Todos reciben df_* para que KPI y drill-down sean exactamente el mismo universo.
+    DetalleCliente(         "detalle_activas",      df_activas,      usr, trigger_update)
+    DetalleClienteRecuperar("detalle_recuperar",    df_recuperar,    usr, trigger_update)
+    DetalleClienteNuevo(    "detalle_nuevas",        df_nuevas,       usr, trigger_update)
+    DashboardLeads(         "detalle_leads",         df_leads,        usr)
+    DashboardOportunidades( "detalle_oportunidades", df_oportunidades, usr)
+    Cohortes(               "detalle_cohortes",      data_cohortes)
     DetalleCompetencia(     "detalle_competencia")
-    Presupuesto(            "detalle_presupuesto",    dat_t, clientes_raw)
+    Presupuesto(            "detalle_presupuesto",   dat_t, clientes_raw)
     
     # Cajas KPI Presupuesto ----
     CajaModal("kpi_cumpl_sacos",
@@ -277,7 +310,8 @@ ResumenTotal <- function(id, dat, dat_t, dat_c, dat_leads, dat_oportunidades, da
               contenido_modal = function() PresupuestoUI(ns("detalle_presupuesto")),
               footer = reactive(paste0(
                 FormatearNumero(kpi_cumpl_sacos_r()$ejec, "coma"), " sacos facturados de ",
-                FormatearNumero(kpi_cumpl_sacos_r()$ppto, "coma"), " presupuestados acumulados al mes."
+                FormatearNumero(kpi_cumpl_sacos_r()$ppto, "coma"),
+                " presupuestados acumulados al mes."
               ) %>% HTML),
               footer_class = "caja-modal-footer"
     )
@@ -298,12 +332,13 @@ ResumenTotal <- function(id, dat, dat_t, dat_c, dat_leads, dat_oportunidades, da
               contenido_modal = function() PresupuestoUI(ns("detalle_presupuesto")),
               footer = reactive(paste0(
                 FormatearNumero(kpi_cumpl_margen_r()$ejec, "dinero"), " facturado de ",
-                FormatearNumero(kpi_cumpl_margen_r()$ppto, "dinero"), " presupuestado acumulado al mes."
+                FormatearNumero(kpi_cumpl_margen_r()$ppto, "dinero"),
+                " presupuestado acumulado al mes."
               ) %>% HTML),
               footer_class = "caja-modal-footer"
     )
     
-    # Cajas KPI UC — usando helper .caja_std ----
+    # Cajas KPI UC ----
     .caja_std(
       id           = "kpi_activas",
       valor_r      = val_activas,
@@ -351,7 +386,9 @@ ResumenTotal <- function(id, dat, dat_t, dat_c, dat_leads, dat_oportunidades, da
       icono        = "address-card",
       titulo_modal = "Detalle \u2014 Leads",
       ui_modal_fn  = function() DashboardLeadsUI(ns("detalle_leads")),
-      footer_r     = reactive("Prospectos registrados en el embudo comercial para el periodo activo.")
+      footer_r     = reactive(
+        "Prospectos registrados en el embudo comercial para el periodo activo."
+      )
     )
     
     .caja_std(
@@ -375,11 +412,11 @@ ResumenTotal <- function(id, dat, dat_t, dat_c, dat_leads, dat_oportunidades, da
       titulo_modal = "Detalle \u2014 Cohorte",
       ui_modal_fn  = function() CohortesUI(ns("detalle_cohortes")),
       footer_r     = reactive({
-        dat <- data_cohortes()
+        d <- data_cohortes()
         paste0(
-          "Poblaci\u00f3n base al ", format(dat$mes_inicio, "%d/%m/%Y"),
+          "Poblaci\u00f3n base al ", format(d$mes_inicio, "%d/%m/%Y"),
           " m\u00e1s altas del periodo. Total mes ",
-          format(dat$mes_vigente, "%B %Y"), "."
+          format(d$mes_vigente, "%B %Y"), "."
         )
       })
     )
@@ -391,9 +428,9 @@ ResumenTotal <- function(id, dat, dat_t, dat_c, dat_leads, dat_oportunidades, da
       icono        = "building-flag",
       titulo_modal = "Detalle \u2014 Competencia",
       ui_modal_fn  = function() DetalleCompetenciaUI(ns("detalle_competencia")),
-      footer_r     = reactive(paste0(
+      footer_r     = reactive(
         "Marcas competidoras con registros activos para el universo de clientes del filtro."
-      ))
+      )
     )
     
   })

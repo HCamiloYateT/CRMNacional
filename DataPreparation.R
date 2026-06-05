@@ -352,6 +352,9 @@ lotes_raw <- cargar_lotes_incremental(datos_previos)
 fact <- cargar_fact()
 
 # Facturas historicas consolidadas por cliente (para indicadores globales)
+ConsultaSistema("syscafe", "select top 10 *  from FCTFACNA where FctNit = 37810621")
+
+
 FACT <- bind_rows(ConsultaSistema("syscafe",
                                    query = "SELECT F2.FctNit,
                                                    MIN(F2.FcnFec)          AS MinFecFact,

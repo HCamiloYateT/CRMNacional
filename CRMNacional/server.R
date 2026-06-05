@@ -1,4 +1,5 @@
 server <- function(input, output, session) {
+  
   # Helpers ----
   
   # Niveles estándar de segmento analítico RFM
@@ -302,9 +303,10 @@ server <- function(input, output, session) {
   })
   
   ## Oportunidades: fuente única; data_oportunidades_f() aplica filtros sobre este cache
-  oportunidades_cache <- create_cache(
-    loader_fn = function() CargarDatos("CRMNALCLOPT")
-  )
+  oportunidades_cache <- create_cache(loader_fn = function() {
+    CargarDatos("CRMNALCLOPT") %>%
+      mutate(LinNegocio = ifelse(LinNegCod == 10000, "CONVENCIONALES", "A LA MEDIDA"))
+  })
   
   ## Competencia: fuente única; data_competencia_f() filtra por usuario
   competencia_cache <- create_cache(
@@ -515,16 +517,6 @@ server <- function(input, output, session) {
   
   ## data_t: filtro por dimensiones de negocio ----
   # Sin preloader: filter() puro sobre data_c() ya en memoria
-  observe({
-    f <- filtros()
-    message("=== FILTROS DEBUG ===")
-    message("f$asesor:    ", paste(f$asesor,    collapse = ",") %||% "NULL")
-    message("f$segmento:  ", paste(f$segmento,  collapse = ",") %||% "NULL")
-    message("f$linneg:    ", paste(f$linneg,     collapse = ",") %||% "NULL")
-    message("f$categoria: ", paste(f$categoria,  collapse = ",") %||% "NULL")
-    message("f$producto:  ", paste(f$producto,   collapse = ",") %||% "NULL")
-    message("data_c nrow: ", tryCatch(nrow(data_c()), error = function(e) paste("ERROR:", e$message)))
-  })
   data_t <- reactive({
     f <- filtros()
     req(data_c(), f$asesor, f$segmento, f$linneg, f$categoria, f$producto)
@@ -560,288 +552,56 @@ server <- function(input, output, session) {
   
   ## Data Cohortes ----
   data_cohortes <- reactive({
-    waiter_show(html = preloader_actualizar$html, color = preloader_actualizar$color)
-    on.exit(waiter_hide())
-    f <- filtros()
+    anio <- year(Sys.Date())
     
-    # Parámetros temporales del año vigente
-    req(!is.null(f$fecha), !any(is.na(f$fecha)))
-    anio    <- year(max(f$fecha, na.rm = TRUE))
-    mes_vig <- PrimerDia(Sys.Date())
-    mes_ini <- as.Date(sprintf("%d-01-01", anio))
-    meses   <- seq.Date(mes_ini, mes_vig, by = "month")
-    nits_data_t <- data_t() %>% distinct(CliNitPpal, LinNegCod)
-    
-    # estados mensuales con cliente_id compuesto
-    crm_base  <- segmentos_raw_cache$get() %>%
-      mutate(cliente_id = paste(CliNitPpal, LinNegCod, sep = "_"))
-    ult_corte <- max(crm_base$FecProceso)
-    t1_corte <- crm_base %>%
-      filter(FecProceso == ult_corte) %>%
-      semi_join(nits_data_t, by = c("CliNitPpal", "LinNegCod")) %>%
-      select(CliNitPpal, LinNegCod, cliente_id, SegmentoRacafe, Meses)
-    
-    # CRMNALCLIENTE snapshot vigente y presupuesto mensual
-    t2_raw <- clientes_raw_cache$get()
-    
-    t2_snap <- t2_raw %>%
-      mutate(Presupuestado = coalesce(SSPpto, 0L) != 0,
-             Asesor        = str_squish(str_to_upper(Asesor))) %>%
-      group_by(CliNitPpal, LinNegCod) %>%
-      filter(FecProceso == max(FecProceso)) %>%
-      slice(1L) %>%
-      ungroup() %>%
-      select(CliNitPpal, LinNegCod, Segmento, Asesor,
-             NumMesesRecuperar, Excluir, Presupuestado, SSPpto, MNFCCPpto)
-    
-    # Presupuesto mensual desde CRMNALCLIENTE (último registro del año / 12)
-    ppto_mensual <- t2_raw %>%
+    # t1: estados mensuales del año en curso desde CRMNALSEGR
+    t1 <- segmentos_raw_cache$get() %>%
+      mutate(FecProceso = as.Date(FecProceso),
+             Estado = recode(SegmentoRacafe, 
+                             "CLIENTE" = "ACTIVO", "CLIENTE A RECUPERAR" = "INACTIVO")) %>%
       filter(year(FecProceso) == anio) %>%
-      group_by(CliNitPpal, LinNegCod) %>%
-      filter(FecProceso == max(FecProceso)) %>%
-      slice(1L) %>%
+      select(FecProceso, LinNegCod, CliNitPpal, Estado)
+    
+    # t2: snapshot vigente de CRMNALCLIENTE — presupuesto mensual prorrateado
+    t2 <- clientes_snap() %>%
+      filter(year(FecProceso) == anio, Excluir != "SI") %>%
+      mutate(PPtoSacos = SSPpto / 12,
+             PPtoMargen = MNFCCPpto / 12,
+             Presupuestado = ifelse(SSPpto > 0, "PRESUPUESTADO", "NO PRESUPUESTADO")) %>%
+      select(LinNegCod, CliNitPpal, Asesor, Segmento, NumMesesRecuperar,
+             PPtoSacos, PPtoMargen, Presupuestado, Excluir)
+    
+    # t3: ventas mensuales del año desde data_c()
+    t3 <- data_c() %>%
+      filter(year(FecFact) == anio, !is.na(FecFact)) %>%
+      group_by(LinNegCod, CliNitPpal,
+               FecProceso = PrimerDia(FecFact)) %>%
+      summarise(Sacos  = sum(SacFact70, na.rm = TRUE),
+                Margen = sum(Margen,    na.rm = TRUE),
+                .groups = "drop")
+    
+    # t4: última fecha de facturación por UC — historial completo sin filtro de año
+    t4 <- data_c() %>%
+      group_by(LinNegCod, CliNitPpal, PerRazSoc) %>%
+      summarise(UltFecFact = if (all(is.na(FecFact))) as.Date(NA) else max(FecFact, na.rm = TRUE),
+                .groups    = "drop")
+    
+    # Ensamble longitudinal: t1 ⟕ t3 — full_join preserva estados sin venta y ventas sin estado
+    t1 %>%
+      full_join(t3, by = join_by(FecProceso, LinNegCod, CliNitPpal)) %>%
+      left_join(t4, by = join_by(LinNegCod, CliNitPpal)) %>%
+      mutate(Estado = ifelse(is.na(Estado), "NUEVO", Estado),
+             Sacos  = ifelse(is.na(Sacos),  0, Sacos),
+             Margen = ifelse(is.na(Margen), 0, Margen)) %>%
+      group_by(LinNegCod, CliNitPpal) %>%
+      mutate(EstadoPanel = max(ifelse(Estado == "NUEVO", 1, 0)),
+             FecIngreso  = if (any(Estado == "NUEVO")) {min(FecProceso[Estado == "NUEVO"])} else {as.Date(paste0(anio, "-01-01"))},
+             EdadPanel   = lubridate::interval(FecIngreso, FecProceso) %/% months(1) + 1
+             ) %>%
       ungroup() %>%
-      transmute(CliNitPpal, LinNegCod,
-                PptoSacosMes  = coalesce(SSPpto,    0) / 12,
-                PptoMargenMes = coalesce(MNFCCPpto, 0) / 12)
-    
-    # Base: todos los clientes del panel CRM; enriquecido con t2 y maestro de personas
-    catalogo <- data_f() %>%
-      group_by(CliNitPpal, LinNegCod) %>%
-      arrange(desc(FecFact)) %>%
-      slice(1L) %>%
-      ungroup() %>%
-      mutate(cliente_id = paste(CliNitPpal, LinNegCod, sep = "_"),
-             PerRazSoc  = coalesce(PerRazSoc, "\u2014"),
-             Asesor     = coalesce(Asesor,    "\u2014"),
-             Segmento   = coalesce(Segmento,  "\u2014")) %>%
-      select(cliente_id, CliNitPpal, LinNegCod, PerRazSoc, Asesor, Segmento)
-    
-    # Transacciones del año
-    tx <- data_t() %>%
-      filter(Excluir == "NO",
-             ProdExcluir == "NO",
-             !is.na(FecFact),
-             year(FecFact) == anio) %>%
-      mutate(FecFact = as.Date(FecFact),
-             ym = PrimerDia(FecFact),
-             cliente_id = paste(CliNitPpal, LinNegCod, sep = "_"))
-    
-    # Marca de presupuesto por UC: columnas PptoSacos/PptoMargen vienen de .cols_cli
-    marca_ppto <- tx %>%
-      filter(ym == mes_ini) %>%
-      group_by(cliente_id, CliNitPpal, LinNegCod) %>%
-      summarise(ppto_sacos_anual  = sum(coalesce(PptoSacos,  0), na.rm = TRUE),
-                ppto_margen_anual = sum(coalesce(PptoMargen, 0), na.rm = TRUE),
-                presupuestada     = if_else(sum(coalesce(PptoSacos, 0), na.rm = TRUE) > 0,
-                                            "PRESUPUESTADA", "NO PRESUPUESTADA"),
-                .groups = "drop"
-                )
-    
-    # Ventas reales mensuales con métricas operacionales
-    real_mensual <- tx %>%
-      group_by(cliente_id, CliNitPpal, LinNegCod, ym) %>%
-      summarise(real_sacos  = sum(coalesce(SacFact70, 0), na.rm = TRUE),
-                real_margen = sum(coalesce(Margen,    0), na.rm = TRUE),
-                num_lotes   = n_distinct(CLLotCod),
-                .groups     = "drop")
-    
-    # Panel ejecución vs presupuesto mes a mes (ambas poblaciones)
-    panel_ejec <- real_mensual %>%
-      left_join(ppto_mensual, by = c("CliNitPpal", "LinNegCod")) %>%
-      left_join(catalogo  %>% select(cliente_id, Asesor, Segmento), by = "cliente_id") %>%
-      left_join(marca_ppto %>% select(cliente_id, presupuestada),   by = "cliente_id") %>%
-      mutate(PptoSacosMes  = coalesce(PptoSacosMes,  0),
-             PptoMargenMes = coalesce(PptoMargenMes, 0),
-             presupuestada = coalesce(presupuestada, "NO PRESUPUESTADA"),
-             CumplSacos    = SiError_0(real_sacos  / PptoSacosMes),
-             CumplMargen   = SiError_0(real_margen / PptoMargenMes),
-             BrechaSacos   = real_sacos  - PptoSacosMes,
-             BrechaMargen  = real_margen - PptoMargenMes)
-    
-    # Última factura histórica por cliente-línea — fuente completa sin filtros de fecha
-    ultima_fact <- datos_rv() %>%
-      filter(!is.na(FecFact)) %>%
-      group_by(CliNitPpal, LinNegCod) %>%
-      summarise(UltimaFact = max(as.Date(FecFact), na.rm = TRUE), .groups = "drop")
-    
-    # Clientes con factura en el mes vigente (con filtros dimensionales de data_t)
-    t3_mes_vig <- data_t() %>%
-      filter(!is.na(FecFact), PrimerDia(as.Date(FecFact)) == mes_vig) %>%
-      distinct(CliNitPpal, LinNegCod) %>%
-      mutate(cliente_id = paste(CliNitPpal, LinNegCod, sep = "_"))
-    
-    # Maestro de personas nuevos creados en los últimos 2 meses
-    # Fechas SQL Server (< 1900-01-01) tratado como NA
-    t4_nuevos <- ncliente_rv() %>%
-      mutate(FecCreacion = as.Date(FecCreacion),
-             FecCreacion = if_else(FecCreacion < as.Date("1900-01-01"), NA_Date_, FecCreacion)) %>%
-      filter(!is.na(FecCreacion), FecCreacion >= mes_vig - months(2)) %>%
-      distinct(CliNitPpal = PerCod)
-    
-    # Panel longitudinal: baseline × meses + altas acumulativas
-    actividad_mensual <- crm_base %>%
-      filter(FecProceso >= mes_ini, FecProceso <= mes_vig) %>%
-      mutate(ym = PrimerDia(FecProceso)) %>%
-      distinct(cliente_id, ym, SegmentoRacafe)
-    
-    # Baseline: clientes con CRM a inicio de año (CLIENTE o CLIENTE A RECUPERAR)
-    nits_baseline <- crm_base %>%
-      filter(FecProceso == mes_ini,
-             SegmentoRacafe %in% c("CLIENTE", "CLIENTE A RECUPERAR")) %>%
-      semi_join(nits_data_t, by = c("CliNitPpal", "LinNegCod")) %>%
-      distinct(CliNitPpal, LinNegCod, cliente_id) %>%
-      left_join(marca_ppto %>% select(cliente_id, presupuestada), by = "cliente_id") %>%
-      mutate(presupuestada = replace_na(presupuestada, "NO PRESUPUESTADA"),
-             tipo_cohorte  = "POBLACION BASE")
-    
-    # Altas en cohorte: facturaron en el año, sin CRM ni factura previa al inicio de año
-    nits_fact_pre <- fact_rv() %>%
-      filter(as.Date(MinFecFact) < mes_ini) %>%
-      distinct(CliNitPpal = FctNit)
-    
-    altas <- tx %>%
-      filter(ym >= mes_ini, ym <= mes_vig) %>%
-      distinct(CliNitPpal, LinNegCod, cliente_id) %>%
-      anti_join(nits_baseline %>% distinct(CliNitPpal), by = "CliNitPpal") %>%
-      anti_join(nits_fact_pre, by = "CliNitPpal") %>%
-      left_join(marca_ppto %>% select(cliente_id, presupuestada), by = "cliente_id") %>%
-      mutate(presupuestada = replace_na(presupuestada, "NO PRESUPUESTADA"),
-             tipo_cohorte  = "ALTA EN COHORTE")
-    
-    # Panel baseline: cruce clientes × meses con estado mensual desde CRMNALSEGR
-    panel_base <- nits_baseline %>%
-      crossing(tibble(ym = meses)) %>%
-      left_join(actividad_mensual, by = c("cliente_id", "ym")) %>%
-      mutate(estado = case_when(SegmentoRacafe == "CLIENTE"             ~ "CLIENTE ACTIVO",
-                                SegmentoRacafe == "CLIENTE A RECUPERAR" ~ "CLIENTE A RECUPERAR",
-                                TRUE                                    ~ "CLIENTE A RECUPERAR"
-                                )) %>%
-      select(cliente_id, CliNitPpal, LinNegCod, presupuestada, tipo_cohorte, ym, estado)
-    
-    # Panel altas: aparece desde el mes de primera factura, estado fijo NUEVO DEL PERIODO
-    primer_mes_nuevo <- tx %>%
-      semi_join(altas, by = "cliente_id") %>%
-      group_by(cliente_id) %>%
-      summarise(mes_entrada = min(ym), .groups = "drop")
-    
-    panel_alt <- altas %>%
-      left_join(primer_mes_nuevo, by = "cliente_id") %>%
-      mutate(mes_entrada = coalesce(mes_entrada, mes_ini)) %>%
-      crossing(tibble(ym = meses)) %>%
-      filter(ym >= mes_entrada) %>%
-      mutate(estado = "NUEVO DEL PERIODO") %>%
-      select(cliente_id, CliNitPpal, LinNegCod, presupuestada,
-             tipo_cohorte, ym, estado, mes_entrada)
-    
-    # Panel completo: baseline + altas enriquecidos con catálogo dimensional
-    panel_full <- bind_rows(panel_base %>% mutate(mes_entrada = mes_ini),
-                            panel_alt) %>%
-      left_join(catalogo %>% select(cliente_id, PerRazSoc, Asesor, Segmento),
-                by = "cliente_id")
-    
-    # Cumplimiento individual por mes para UCs presupuestadas
-    panel_cumpl <- marca_ppto %>%
-      filter(presupuestada == "PRESUPUESTADA") %>%
-      select(cliente_id, LinNegCod, ppto_sacos_anual, ppto_margen_anual) %>%
-      crossing(tibble(ym = meses)) %>%
-      left_join(panel_base %>% select(cliente_id, ym, estado),
-                by = c("cliente_id", "ym")) %>%
-      left_join(real_mensual %>% select(cliente_id, ym, real_sacos, real_margen),
-                by = c("cliente_id", "ym")) %>%
-      mutate(ppto_sacos_mes   = ppto_sacos_anual  / 12,
-             ppto_margen_mes  = ppto_margen_anual / 12,
-             real_sacos       = coalesce(real_sacos,  0),
-             real_margen      = coalesce(real_margen, 0),
-             cumpl_sacos_pct  = if_else(ppto_sacos_mes  > 0, round(real_sacos  / ppto_sacos_mes  * 100, 1), NA_real_),
-             cumpl_margen_pct = if_else(ppto_margen_mes > 0, round(real_margen / ppto_margen_mes * 100, 1), NA_real_)) %>%
-      select(cliente_id, LinNegCod, ym, estado,
-             ppto_sacos_mes, real_sacos,  cumpl_sacos_pct,
-             ppto_margen_mes, real_margen, cumpl_margen_pct)
-    
-    # Tasa de facturación por UC sobre el panel completo
-    tasa_fact_uc <- panel_full %>%
-      group_by(cliente_id) %>%
-      summarise(meses_en_panel   = n_distinct(ym),
-                meses_con_fact   = sum(estado == "CLIENTE ACTIVO", na.rm = TRUE),
-                tasa_facturacion = meses_con_fact / pmax(meses_en_panel, 1),
-                .groups          = "drop")
-    
-    # Transiciones del mes vigente
-    
-    # Helper local: enriquece fila de transición especial con catálogo y campos fijos
-    .enrich_trans <- function(base, tipo) {
-      base %>%
-        left_join(catalogo %>% select(cliente_id, PerRazSoc, Asesor, Segmento),
-                  by = "cliente_id") %>%
-        mutate(SegmentoRacafe       = NA_character_, 
-               Meses = NA_integer_,
-               presupuestada        = "NO PRESUPUESTADA",
-               UltimaFact           = NA_Date_,      FecLimite = NA_Date_,
-               EstadoProyectado     = "CLIENTE",
-               Transicion           = tipo,
-               DiasHastaVencimiento = NA_integer_)
-    }
-    
-    # Proyección de transiciones para clientes conocidos en CRMNALSEGR
-    proyeccion <- t1_corte %>%
-      left_join(ultima_fact, by = c("CliNitPpal", "LinNegCod")) %>%
-      left_join(catalogo %>% select(cliente_id, PerRazSoc, Asesor, Segmento),
-                by = "cliente_id") %>%
-      left_join(marca_ppto %>% select(cliente_id, presupuestada), by = "cliente_id") %>%
-      mutate(presupuestada    = coalesce(presupuestada, "NO PRESUPUESTADA"),
-             FecLimite        = mes_vig - months(Meses),
-             EstadoProyectado = if_else(coalesce(UltimaFact, as.Date("2000-01-01")) >= FecLimite, "CLIENTE", "CLIENTE A RECUPERAR"),
-             Transicion = case_when(SegmentoRacafe == "CLIENTE" & EstadoProyectado == "CLIENTE A RECUPERAR" ~ "ACTIVO_A_INACTIVO",
-                                    SegmentoRacafe == "CLIENTE A RECUPERAR" & EstadoProyectado == "CLIENTE" ~ "INACTIVO_A_ACTIVO",
-                                    SegmentoRacafe == "CLIENTE" & EstadoProyectado == "CLIENTE" ~ "MANTIENE_ACTIVO",
-                                    SegmentoRacafe == "CLIENTE A RECUPERAR" & EstadoProyectado == "CLIENTE A RECUPERAR" ~ "MANTIENE_INACTIVO",
-                                    TRUE ~ "OTRO"),
-             DiasHastaVencimiento = as.integer(coalesce(UltimaFact + months(Meses), FecLimite) - Sys.Date())
-             )
-    
-    # Nuevos absolutos: facturaron este mes, creados en t4 en los últimos 2 meses
-    nuevos_abs <- t3_mes_vig %>%
-      anti_join(t1_corte,  by = c("CliNitPpal", "LinNegCod")) %>%
-      semi_join(t4_nuevos, by = "CliNitPpal") %>%
-      .enrich_trans("NUEVO_ABSOLUTO")
-    
-    # Reactivados sin CRM: facturaron este mes, no en t1 y no son nuevos absolutos
-    reactivados <- t3_mes_vig %>%
-      anti_join(t1_corte,  by = c("CliNitPpal", "LinNegCod")) %>%
-      anti_join(t4_nuevos, by = "CliNitPpal") %>%
-      .enrich_trans("REACTIVADO_SIN_CRM")
-    
-    transiciones <- bind_rows(proyeccion, nuevos_abs, reactivados)
-    
-    # Retorno como lista nombrada
-    list(
-      # Metadatos temporales
-      mes_vigente    = mes_vig,
-      mes_inicio     = mes_ini,
-      meses_periodo  = meses,
-      ultimo_corte   = ult_corte,
-      # Catálogo dimensional
-      catalogo       = catalogo,
-      # Snapshots base
-      t1_corte       = t1_corte,
-      t2_snap        = t2_snap,
-      # Panel longitudinal
-      panel_full     = panel_full,
-      panel_cumpl    = panel_cumpl,
-      tasa_fact_uc   = tasa_fact_uc,
-      real_mensual   = real_mensual,
-      # Ejecución vs presupuesto mes a mes
-      panel_ejec     = panel_ejec,
-      # Transiciones del mes vigente
-      transiciones   = transiciones,
-      # Auxiliares para modales de detalle
-      t3_mes_vigente = t3_mes_vig,
-      t4_nuevos      = t4_nuevos,
-      # Meses con facturación real (para gt de cumplimiento dentro del módulo)
-      meses_con_real = real_mensual %>%
-        filter(real_sacos > 0) %>% pull(ym) %>% unique() %>% sort()
-    )
+      mutate(EstadoPanel = ifelse(EstadoPanel == 1, "NUEVO", Estado)) %>%
+      left_join(t2, by = join_by(LinNegCod, CliNitPpal)) %>%
+      filter(Excluir != "SI")
   })
   observeEvent(data_cohortes(), { assign("BaseCohortes", data_cohortes(), envir = .GlobalEnv) }) #[DEBUG] 
   ## Pedidos sin lote asignado ----
@@ -892,20 +652,27 @@ server <- function(input, output, session) {
   )
   
   ## Leads ----
-  rv <- reactiveValues(btn = NULL)
-  v  <- FormularioLeads("Ingreso", rv = rv, usuario, tit = reactive(""))
-  
   data_leads_f <- reactive({
     f <- filtros()
+    linneg_cod_activos <- linneg_cache$get() %>%
+      filter(LinNeg %in% f$linneg) %>%
+      pull(LinNegCod)
     leads_cache$get() %>%
-      filter(AutorizaTD == "SI", Segmento %in% f$segmento, LinNegocio %in% f$linneg)
+      filter(AutorizaTD == "SI",
+             LinNegCod  %in% linneg_cod_activos,
+             Segmento   %in% f$segmento,
+             Asesor     %in% f$asesor
+             )
   })
-  # [DEBUG] observeEvent(data_leads_f(), { assign("BaseLeads", data_leads_f(), envir = .GlobalEnv) })
+  observeEvent(data_leads_f(), { assign("BaseLeads", data_leads_f(), envir = .GlobalEnv) }) # [DEBUG] 
   
   ## Oportunidades ----
   data_oportunidades_f <- reactive({
     f <- filtros()
-    req(f$linneg, f$segmento)
+    req(f$linneg, f$segmento, f$asesor)
+    dims <- data_t() %>%
+      select(CliNitPpal, LinNegCod, Segmento, Asesor) %>%
+      distinct()
     oportunidades_cache$get() %>%
       mutate(
         Sacos70       = if_else(LinNegCod == 10000, Sacos * 62.5 / 70, Sacos),
@@ -916,6 +683,7 @@ server <- function(input, output, session) {
         MargenMes     = SiError_0(MargenTotalOP / (FrecuenciaDias / 30)),
         Descartado    = if_else(is.na(Descartado), "NO", Descartado)
       ) %>%
+      inner_join(dims, by = c("CLCliNit" = "CliNitPpal", "LinNegCod")) %>%
       left_join(
         data_c() %>%
           mutate(FecFact = as.Date(FecFact)) %>%
@@ -926,12 +694,14 @@ server <- function(input, output, session) {
       mutate(Cliente = PerRazSoc) %>%
       crear_link_cliente("Cliente", "LineaNegocio")
   })
-  # [DEBUG] observeEvent(data_oportunidades_f(), { assign("BaseOportunidades", data_oportunidades_f(), envir = .GlobalEnv) })
+  observeEvent(data_oportunidades_f(), { assign("BaseOportunidades", data_oportunidades_f(), envir = .GlobalEnv) }) # [DEBUG] 
   
   ## Competencia ----
   data_competencia_f <- reactive({
     competencia_cache$get() %>% filter(UsuarioCrea %in% usuario())
   })
+  
+  observeEvent(data_competencia_f(), { assign("BaseCompetencia", data_competencia_f(), envir = .GlobalEnv) }) # [DEBUG] 
   
   ## Consulta individual ----
   data_individual <- reactive({

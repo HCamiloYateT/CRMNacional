@@ -5,6 +5,7 @@ options(
   dplyr.summarise.inform = FALSE,
   repos = c(CRAN = "https://cloud.r-project.org")
 )
+options(sass.cache = FALSE)
 
 tit_app = "CRM Nacional"
 
@@ -135,6 +136,6 @@ load_modules <- function(path = "misc", verbose = FALSE, progress = TRUE) {
   
   invisible(list(ok = length(cargados), fallidos = names(errores), errores = errores))
 }
-load_modules(verbose = TRUE)
+load_modules(verbose = FALSE)
 
 .app_choices <- Choices()
