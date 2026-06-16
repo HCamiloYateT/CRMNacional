@@ -58,3 +58,83 @@ shiny::runApp("dev/probar_modulos_bs4dash.R")
 ```
 
 En ese archivo hay un bloque `MODULOS_ACTIVOS` donde puedes **comentar/descomentar** módulos para activar solo los que quieras validar, y un `CATALOGO_MODULOS` amplio con opciones de prueba para la mayoría de módulos actuales.
+
+
+## Propuesta de estructura concreta (1 archivo por módulo)
+
+Si quieren dejar la app con una estructura más mantenible y con **un archivo por módulo**, propongo esta organización objetivo:
+
+```text
+CRMNacional/
+├─ app.R                         # punto de entrada (alternativa a ui.R + server.R)
+├─ global.R
+├─ config/
+│  ├─ packages.R                 # carga de librerías
+│  ├─ options.R                  # opciones globales
+│  └─ constants.R                # constantes de negocio
+├─ core/
+│  ├─ data_sources.R             # conexiones y lecturas
+│  ├─ repositories.R             # acceso a datos (queries/fuentes)
+│  ├─ services.R                 # reglas de negocio reutilizables
+│  ├─ reactive_store.R           # reactives/global state
+│  └─ routing.R                  # registro/ensamble de módulos
+├─ modules/
+│  ├─ dashboard_leads.R
+│  ├─ dashboard_oportunidades.R
+│  ├─ leads.R
+│  ├─ detalle_leads.R
+│  ├─ formulario_leads.R
+│  ├─ oportunidades.R
+│  ├─ cotizador.R
+│  ├─ presupuesto.R
+│  ├─ cohortes.R
+│  ├─ rfm.R
+│  ├─ indicadores.R
+│  ├─ pendientes.R
+│  ├─ tareas.R
+│  ├─ notificaciones.R
+│  └─ ...                        # 1 archivo por módulo funcional
+├─ ui/
+│  ├─ page.R                     # bs4DashPage
+│  ├─ header.R
+│  ├─ sidebar.R
+│  ├─ body.R
+│  ├─ controlbar.R
+│  └─ footer.R
+├─ shared/
+│  ├─ helpers.R                  # utilidades transversales
+│  ├─ filters.R                  # filtros comunes
+│  ├─ validators.R               # validaciones
+│  └─ formatters.R               # formateadores
+├─ www/
+│  ├─ style.css
+│  └─ img/
+├─ tests/
+│  ├─ testthat/
+│  └─ shinytest2/
+└─ dev/
+   └─ probar_modulos_bs4dash.R
+```
+
+### Convenciones recomendadas por módulo
+
+Cada archivo en `modules/` debería exponer siempre la misma interfaz:
+
+- `mod_<nombre>_ui(id)`
+- `mod_<nombre>_server(id, rv, data, ...)`
+
+Ejemplo: `modules/leads.R` contiene únicamente `mod_leads_ui()` y `mod_leads_server()` (más helpers privados internos del módulo).
+
+### Mapeo sugerido desde la estructura actual
+
+- `CRMNacional/misc/modules/*.R` → `CRMNacional/modules/*.R`
+- `CRMNacional/misc/ui/*.R` → `CRMNacional/ui/*.R`
+- `CRMNacional/misc/functions.R`, `filters.R`, `values.R` → `CRMNacional/shared/*`
+- `CRMNacional/ui.R` y `CRMNacional/server.R` pueden mantenerse inicialmente y migrar a `app.R` al final.
+
+### Plan de migración en 4 pasos
+
+1. Crear carpetas nuevas (`modules`, `ui`, `shared`, `core`, `config`) sin romper la app actual.
+2. Migrar módulos uno a uno (`misc/modules` → `modules`) respetando la firma `mod_*_ui/server`.
+3. Centralizar utilidades comunes en `shared/` y reglas de negocio en `core/services.R`.
+4. Cuando todo funcione, consolidar entrada en `app.R` y dejar `ui.R/server.R` como wrappers o retirarlos.
