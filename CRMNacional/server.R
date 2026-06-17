@@ -525,15 +525,14 @@ server <- function(input, output, session) {
         Excluir    != "SI",
         Asesor     %in% f$asesor,
         Segmento   %in% f$segmento,
-        CLLinNegNo %in% f$linneg
-        # Categoria  %in% f$categoria,
-        # Producto   %in% f$producto
+        CLLinNegNo %in% f$linneg,
+        Categoria  %in% f$categoria,
+        Producto   %in% f$producto
       )
   })
   observeEvent(data_t(), { assign("BaseDatos_t", data_t(), envir = .GlobalEnv) }) # [DEBUG]
   
   ## data_f: filtro por rango de fechas de factura ----
-  # Único punto del árbol reactivo con preloader (hoja visible más costosa)
   data_f <- reactive({
     waiter_show(html = preloader_actualizar$html, color = preloader_actualizar$color)
     on.exit(waiter_hide())
@@ -586,7 +585,7 @@ server <- function(input, output, session) {
       summarise(UltFecFact = if (all(is.na(FecFact))) as.Date(NA) else max(FecFact, na.rm = TRUE),
                 .groups    = "drop")
     
-    # Ensamble longitudinal: t1 ⟕ t3 — full_join preserva estados sin venta y ventas sin estado
+    # Ensamble longitudinal
     t1 %>%
       full_join(t3, by = join_by(FecProceso, LinNegCod, CliNitPpal)) %>%
       left_join(t4, by = join_by(LinNegCod, CliNitPpal)) %>%
@@ -1247,7 +1246,7 @@ server <- function(input, output, session) {
   # Calculadora("Calculadoras",     data_ind, usuario)
   # Presupuesto("PresupuestoTotal", data_t,   clientes_raw)
   # Pendientes("Pendientes",        data_f,   ped_sinlote, usuario)
-  # 
+  
   # ### Oportunidades ----
   # FormularioOportunidad("Formulario", dat = data_c, usr = usuario,
   #                       trigger_update = trigger_update_opt)
