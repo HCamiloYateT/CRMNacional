@@ -160,8 +160,5 @@ df_indicadores <- extraer_indicadores(uid, pwd) %>%
   relocate(FechaActualizacion)
 
 racafe::AgregarDatos(df_indicadores, "CRMINDICADORES")
-CargarDatos("CRMINDICADORES")
-
-
 rm(list = ls(), envir = .GlobalEnv)
 gc()
