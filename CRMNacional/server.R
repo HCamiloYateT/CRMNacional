@@ -1263,179 +1263,179 @@ server <- function(input, output, session) {
   # Presupuesto("PresupuestoTotal", data_t,   clientes_raw)
   # Pendientes("Pendientes",        data_f,   ped_sinlote, usuario)
   
-  # ### Oportunidades ----
-  # FormularioOportunidad("Formulario", dat = data_c, usr = usuario,
-  #                       trigger_update = trigger_update_opt)
-  # TablaOportunidades("Listado", data_op = data_oportunidades_f, usr = usuario,
-  #                    trigger_update = trigger_update_opt)
-  # DashboardOportunidades("Oportunidades", data_oportunidades_f)
-  # 
-  # ### Clientes ----
-  # DetalleCliente(id = "ResumenClientes", data_f, usr = usuario,
-  #                trigger_update = trigger_update_opt)
-  # 
-  # ppto_clientes <- reactive({ data_t() %>% filter(SegmentoRacafe == "CLIENTE") })
-  # Presupuesto("Presupuesto", ppto_clientes, clientes_raw)
-  # 
-  # RFM("RFMClientesSacos",  data_rfm_cliente_f_s)
-  # RFM("RFMClientesMargen", data_rfm_cliente_f_m, "$ MNFCC")
-  # ClientesNuevosRecuperados("ClientesNuevosRecuperados", datos_rv, data_f)
-  # 
-  # ### Clientes a Recuperar ----
-  # DetalleClienteRecuperar(id = "ResumenClientesRecuperar", data_f, usr = usuario,
-  #                         trigger_update = trigger_update_opt)
-  # 
-  # output$ClientesRecuperarConPPto <- renderDT({
-  #   aux1 <- data_f() %>%
-  #     filter(SegmentoRacafe == "CLIENTE A RECUPERAR", PptoMargen != 0) %>%
-  #     group_by(PerRazSoc, LineaNegocio = CLLinNegNo, Segmento) %>%
-  #     summarise(
-  #       UltDespacho = max(FecFact, na.rm = TRUE),
-  #       Presupuesto = max(PptoMargen / 12),
-  #       SacosMes    = sum(
-  #         if_else(PrimerDia(FecFact) == PrimerDia(Sys.Date()), Kilos / 70, 0), na.rm = TRUE
-  #       ),
-  #       SacosAnho   = sum(
-  #         if_else(year(FecFact) == year(Sys.Date()), Kilos / 70, 0), na.rm = TRUE
-  #       ),
-  #       MargenMes   = sum(
-  #         if_else(PrimerDia(FecFact) == PrimerDia(Sys.Date()), Margen / 70, 0), na.rm = TRUE
-  #       ),
-  #       MargenAnho  = sum(
-  #         if_else(year(FecFact) == year(Sys.Date()), Margen, 0), na.rm = TRUE
-  #       ),
-  #       .groups     = "drop"
-  #     ) %>%
-  #     janitor::adorn_totals("row", name = "TOTAL")
-  #   ImprimirDTRAzSocLinNeg(
-  #     aux1,
-  #     noms     = c(
-  #       "Raz\u00f3n Social", "L\u00ednea de Negocio", "Segmento Racaf\u00e9",
-  #       "\u00daltima Facturaci\u00f3n", "Presupuesto",
-  #       "Sacos Mes", "Sacos A\u00f1o", "M\u00e1rgen Mes", "M\u00e1rgen A\u00f1o"
-  #     ),
-  #     formatos = c(NA, NA, NA, NA, "dinero", "sacos", "sacos", "dinero", "dinero"),
-  #     dom = "Bft", buscar = TRUE, alto = 500
-  #   )
-  # })
-  # 
-  # data_sankey_clirec <- reactive({
-  #   data_f() %>%
-  #     mutate(
-  #       Niv1 = ifelse(is.na(EstadoCliente), "POR CONTACTAR", EstadoCliente),
-  #       Niv2 = ifelse(
-  #         EstadoCliente == "CONTACTADO",
-  #         ifelse(is.na(EstadoNegocio), "SIN ESTADO", EstadoNegocio),
-  #         NA
-  #       ),
-  #       Niv3 = str_to_upper(case_when(
-  #         EstadoCliente == "CONTACTADO" & EstadoNegocio == "DESCARTADO" ~
-  #           RazonDescartado,
-  #         EstadoCliente == "CONTACTADO" & grepl("OPORTUNIDAD", EstadoNegocio) ~
-  #           paste("Cada", FrecuenciaDias, "d\u00edas")
-  #       ))
-  #     )
-  # })
-  # SankeyTabla("ClienteRecuperar", data_sankey_clirec)
-  # 
-  # RFM("RFMCliRecSacos",  data_rfm_clirec_f_s)
-  # RFM("RFMCliRecMargen", data_rfm_clirec_f_m, "$ MNFCC")
-  # 
-  # output$ClientesRecuperar <- renderDT({
-  #   # segmentos_raw_cache reemplaza CargarDatos("CRMNALSEGR") directo
-  #   # Se requiere histórico de dos snapshots; segmentos_cache solo expone el último
-  #   aux1 <- segmentos_raw_cache$get() %>%
-  #     select(LinNegCod, CliNitPpal, SegmentoRacafe, FecProceso) %>%
-  #     filter(FecProceso >= PrimerDia(Sys.Date()) - months(1)) %>%
-  #     group_by(LinNegCod, CliNitPpal) %>%
-  #     pivot_wider(names_from = FecProceso, values_from = SegmentoRacafe) %>%
-  #     setNames(c("LinNegCod", "CliNitPpal", "Antes", "Ahora")) %>%
-  #     filter(Antes %in% c("CLIENTE", NA) & Ahora == "CLIENTE A RECUPERAR") %>%
-  #     select(LinNegCod, CliNitPpal)
-  # 
-  #   aux2 <- data_f() %>%
-  #     inner_join(aux1, by = join_by(LinNegCod, CliNitPpal)) %>%
-  #     group_by(PerRazSoc, LineaNegocio = CLLinNegNo, Segmento) %>%
-  #     summarise(
-  #       UltDespacho = max(FecFact, na.rm = TRUE),
-  #       SacosMes    = sum(
-  #         if_else(PrimerDia(FecDesp) == PrimerDia(Sys.Date()), Kilos / 70, 0), na.rm = TRUE
-  #       ),
-  #       SacosAnho   = sum(
-  #         if_else(year(FecDesp) == year(Sys.Date()), Kilos / 70, 0), na.rm = TRUE
-  #       ),
-  #       MargenMes   = sum(
-  #         if_else(PrimerDia(FecDesp) == PrimerDia(Sys.Date()), Margen / 70, 0), na.rm = TRUE
-  #       ),
-  #       MargenAnho  = sum(
-  #         if_else(year(FecDesp) == year(Sys.Date()), Margen, 0), na.rm = TRUE
-  #       ),
-  #       .groups     = "drop"
-  #     ) %>%
-  #     janitor::adorn_totals("row", name = "TOTAL")
-  #   ImprimirDTRAzSocLinNeg(
-  #     aux2,
-  #     noms     = c(
-  #       "Raz\u00f3n Social", "L\u00ednea de Negocio", "Segmento Racaf\u00e9",
-  #       "\u00daltima Facturaci\u00f3n",
-  #       "Sacos Mes", "Sacos A\u00f1o", "M\u00e1rgen Mes", "M\u00e1rgen A\u00f1o"
-  #     ),
-  #     formatos = c(NA, NA, NA, NA, "sacos", "sacos", "dinero", "dinero"),
-  #     dom = "Bft", buscar = TRUE, alto = 500
-  #   )
-  # })
-  # 
-  # ### Leads ----
-  # dt_ResumenLeads <- reactive({
-  #   aux1 <- data_leads_f() %>%
-  #     select(-c(UsuarioCrea, FechaHoraCrea, UsuarioMod, FechaHoraModi)) %>%
-  #     mutate(pct_missing = rowSums(is.na(.)) / ncol(.)) %>%
-  #     select(PerRazSoc, Asesor, pct_missing, SacosPotencial, MargenPotencial)
-  #   aux1$pct_missing <- sapply(aux1$pct_missing, function(x) {
-  #     FormatearNumero(x, formato = "porcentaje", meta = c(0.5, 0.7), prop = FALSE)
-  #   })
-  #   aux1 %>%
-  #     ImprimirDTLead(
-  #       botones  = c("Contacto", "Editar"),
-  #       noms     = c("Raz\u00f3n Social", "Asesor", "Pct Ausente", "Sacos (70kg)", "M\u00e1rgen"),
-  #       formatos = c(NA, NA, NA, "sacos", "dinero"),
-  #       dom      = "ft",
-  #       buscar   = TRUE
-  #     )
-  # })
-  # dd_ResumenLeads <- reactive({ datos_rv() })
-  # TablaModalCelda("ResumenLeads", dt_ResumenLeads, dd_ResumenLeads, usuario, rv)
-  # 
-  # data_sankey_lead <- reactive({
-  #   data_leads_f() %>%
-  #     mutate(
-  #       CliNitPpal = PerRazSoc,
-  #       CLLinNegNo = LinNegocio,
-  #       FecFact    = NA,
-  #       FecDesp    = NA,
-  #       Kilos      = ifelse(LinNegocio == 10000, SacosPotencial * 62.5, SacosPotencial * 70),
-  #       Margen     = MargenPotencial,
-  #       Niv1       = ifelse(is.na(EstadoCuenta), "POR CONTACTAR", EstadoCuenta),
-  #       Niv2       = ifelse(
-  #         EstadoCuenta == "CONTACTADO",
-  #         ifelse(is.na(EstadoNegocio), "SIN ESTADO", EstadoNegocio),
-  #         NA
-  #       ),
-  #       Niv3 = str_to_upper(case_when(
-  #         EstadoCuenta == "CONTACTADO" & EstadoNegocio == "DESCARTADO" ~ RazonDescartado
-  #       ))
-  #     )
-  # })
-  # SankeyTabla("Leads", data_sankey_lead)
-  # 
-  # ### Consulta Individual ----
-  # Individual(
-  #   "ConsultaIndivual",
-  #   dat          = data_individual,
-  #   usr          = usuario,
-  #   clientes_raw = clientes_raw,
-  #   dat_global   = data_c
-  # )
+  ### Oportunidades ----
+  FormularioOportunidad("Formulario", dat = data_c, usr = usuario,
+                        trigger_update = trigger_update_opt)
+  TablaOportunidades("Listado", data_op = data_oportunidades_f, usr = usuario,
+                     trigger_update = trigger_update_opt)
+  DashboardOportunidades("Oportunidades", data_oportunidades_f)
+
+  ### Clientes ----
+  DetalleCliente(id = "ResumenClientes", data_f, usr = usuario,
+                 trigger_update = trigger_update_opt)
+
+  ppto_clientes <- reactive({ data_t() %>% filter(SegmentoRacafe == "CLIENTE") })
+  Presupuesto("Presupuesto", ppto_clientes, clientes_raw)
+
+  RFM("RFMClientesSacos",  data_rfm_cliente_f_s)
+  RFM("RFMClientesMargen", data_rfm_cliente_f_m, "$ MNFCC")
+  ClientesNuevosRecuperados("ClientesNuevosRecuperados", datos_rv, data_f)
+
+  ### Clientes a Recuperar ----
+  DetalleClienteRecuperar(id = "ResumenClientesRecuperar", data_f, usr = usuario,
+                          trigger_update = trigger_update_opt)
+
+  output$ClientesRecuperarConPPto <- renderDT({
+    aux1 <- data_f() %>%
+      filter(SegmentoRacafe == "CLIENTE A RECUPERAR", PptoMargen != 0) %>%
+      group_by(PerRazSoc, LineaNegocio = CLLinNegNo, Segmento) %>%
+      summarise(
+        UltDespacho = max(FecFact, na.rm = TRUE),
+        Presupuesto = max(PptoMargen / 12),
+        SacosMes    = sum(
+          if_else(PrimerDia(FecFact) == PrimerDia(Sys.Date()), Kilos / 70, 0), na.rm = TRUE
+        ),
+        SacosAnho   = sum(
+          if_else(year(FecFact) == year(Sys.Date()), Kilos / 70, 0), na.rm = TRUE
+        ),
+        MargenMes   = sum(
+          if_else(PrimerDia(FecFact) == PrimerDia(Sys.Date()), Margen / 70, 0), na.rm = TRUE
+        ),
+        MargenAnho  = sum(
+          if_else(year(FecFact) == year(Sys.Date()), Margen, 0), na.rm = TRUE
+        ),
+        .groups     = "drop"
+      ) %>%
+      janitor::adorn_totals("row", name = "TOTAL")
+    ImprimirDTRAzSocLinNeg(
+      aux1,
+      noms     = c(
+        "Raz\u00f3n Social", "L\u00ednea de Negocio", "Segmento Racaf\u00e9",
+        "\u00daltima Facturaci\u00f3n", "Presupuesto",
+        "Sacos Mes", "Sacos A\u00f1o", "M\u00e1rgen Mes", "M\u00e1rgen A\u00f1o"
+      ),
+      formatos = c(NA, NA, NA, NA, "dinero", "sacos", "sacos", "dinero", "dinero"),
+      dom = "Bft", buscar = TRUE, alto = 500
+    )
+  })
+
+  data_sankey_clirec <- reactive({
+    data_f() %>%
+      mutate(
+        Niv1 = ifelse(is.na(EstadoCliente), "POR CONTACTAR", EstadoCliente),
+        Niv2 = ifelse(
+          EstadoCliente == "CONTACTADO",
+          ifelse(is.na(EstadoNegocio), "SIN ESTADO", EstadoNegocio),
+          NA
+        ),
+        Niv3 = str_to_upper(case_when(
+          EstadoCliente == "CONTACTADO" & EstadoNegocio == "DESCARTADO" ~
+            RazonDescartado,
+          EstadoCliente == "CONTACTADO" & grepl("OPORTUNIDAD", EstadoNegocio) ~
+            paste("Cada", FrecuenciaDias, "d\u00edas")
+        ))
+      )
+  })
+  SankeyTabla("ClienteRecuperar", data_sankey_clirec)
+
+  RFM("RFMCliRecSacos",  data_rfm_clirec_f_s)
+  RFM("RFMCliRecMargen", data_rfm_clirec_f_m, "$ MNFCC")
+
+  output$ClientesRecuperar <- renderDT({
+    # segmentos_raw_cache reemplaza CargarDatos("CRMNALSEGR") directo
+    # Se requiere histórico de dos snapshots; segmentos_cache solo expone el último
+    aux1 <- segmentos_raw_cache$get() %>%
+      select(LinNegCod, CliNitPpal, SegmentoRacafe, FecProceso) %>%
+      filter(FecProceso >= PrimerDia(Sys.Date()) - months(1)) %>%
+      group_by(LinNegCod, CliNitPpal) %>%
+      pivot_wider(names_from = FecProceso, values_from = SegmentoRacafe) %>%
+      setNames(c("LinNegCod", "CliNitPpal", "Antes", "Ahora")) %>%
+      filter(Antes %in% c("CLIENTE", NA) & Ahora == "CLIENTE A RECUPERAR") %>%
+      select(LinNegCod, CliNitPpal)
+
+    aux2 <- data_f() %>%
+      inner_join(aux1, by = join_by(LinNegCod, CliNitPpal)) %>%
+      group_by(PerRazSoc, LineaNegocio = CLLinNegNo, Segmento) %>%
+      summarise(
+        UltDespacho = max(FecFact, na.rm = TRUE),
+        SacosMes    = sum(
+          if_else(PrimerDia(FecDesp) == PrimerDia(Sys.Date()), Kilos / 70, 0), na.rm = TRUE
+        ),
+        SacosAnho   = sum(
+          if_else(year(FecDesp) == year(Sys.Date()), Kilos / 70, 0), na.rm = TRUE
+        ),
+        MargenMes   = sum(
+          if_else(PrimerDia(FecDesp) == PrimerDia(Sys.Date()), Margen / 70, 0), na.rm = TRUE
+        ),
+        MargenAnho  = sum(
+          if_else(year(FecDesp) == year(Sys.Date()), Margen, 0), na.rm = TRUE
+        ),
+        .groups     = "drop"
+      ) %>%
+      janitor::adorn_totals("row", name = "TOTAL")
+    ImprimirDTRAzSocLinNeg(
+      aux2,
+      noms     = c(
+        "Raz\u00f3n Social", "L\u00ednea de Negocio", "Segmento Racaf\u00e9",
+        "\u00daltima Facturaci\u00f3n",
+        "Sacos Mes", "Sacos A\u00f1o", "M\u00e1rgen Mes", "M\u00e1rgen A\u00f1o"
+      ),
+      formatos = c(NA, NA, NA, NA, "sacos", "sacos", "dinero", "dinero"),
+      dom = "Bft", buscar = TRUE, alto = 500
+    )
+  })
+
+  ### Leads ----
+  dt_ResumenLeads <- reactive({
+    aux1 <- data_leads_f() %>%
+      select(-c(UsuarioCrea, FechaHoraCrea, UsuarioMod, FechaHoraModi)) %>%
+      mutate(pct_missing = rowSums(is.na(.)) / ncol(.)) %>%
+      select(PerRazSoc, Asesor, pct_missing, SacosPotencial, MargenPotencial)
+    aux1$pct_missing <- sapply(aux1$pct_missing, function(x) {
+      FormatearNumero(x, formato = "porcentaje", meta = c(0.5, 0.7), prop = FALSE)
+    })
+    aux1 %>%
+      ImprimirDTLead(
+        botones  = c("Contacto", "Editar"),
+        noms     = c("Raz\u00f3n Social", "Asesor", "Pct Ausente", "Sacos (70kg)", "M\u00e1rgen"),
+        formatos = c(NA, NA, NA, "sacos", "dinero"),
+        dom      = "ft",
+        buscar   = TRUE
+      )
+  })
+  dd_ResumenLeads <- reactive({ datos_rv() })
+  TablaModalCelda("ResumenLeads", dt_ResumenLeads, dd_ResumenLeads, usuario, rv)
+
+  data_sankey_lead <- reactive({
+    data_leads_f() %>%
+      mutate(
+        CliNitPpal = PerRazSoc,
+        CLLinNegNo = LinNegocio,
+        FecFact    = NA,
+        FecDesp    = NA,
+        Kilos      = ifelse(LinNegocio == 10000, SacosPotencial * 62.5, SacosPotencial * 70),
+        Margen     = MargenPotencial,
+        Niv1       = ifelse(is.na(EstadoCuenta), "POR CONTACTAR", EstadoCuenta),
+        Niv2       = ifelse(
+          EstadoCuenta == "CONTACTADO",
+          ifelse(is.na(EstadoNegocio), "SIN ESTADO", EstadoNegocio),
+          NA
+        ),
+        Niv3 = str_to_upper(case_when(
+          EstadoCuenta == "CONTACTADO" & EstadoNegocio == "DESCARTADO" ~ RazonDescartado
+        ))
+      )
+  })
+  SankeyTabla("Leads", data_sankey_lead)
+
+  ### Consulta Individual ----
+  Individual(
+    "ConsultaIndivual",
+    dat          = data_individual,
+    usr          = usuario,
+    clientes_raw = clientes_raw,
+    dat_global   = data_c
+  )
 
   # Footer ----
   output$last_update_info <- renderText({

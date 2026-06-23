@@ -172,11 +172,28 @@ ResumenTotal <- function(id, dat, dat_t, dat_c, dat_leads, dat_oportunidades, da
         filter(FecProceso == mes_vigente)
       
     })
+    df_cohorte_vig <- reactive({
+      req(nrow(df_cohorte()) > 0)
+      df_cohorte() %>%
+        filter(FecProceso == max(FecProceso, na.rm = TRUE))
+    })
     
-    ## Conteos — única fuente numérica para KPI y drill-down ----
-    val_activas <- reactive({ n_distinct(df_activas()$LinNegCod, df_activas()$CliNitPpal) })
-    val_recuperar <- reactive({ n_distinct(df_recuperar()$LinNegCod, df_recuperar()$CliNitPpal) })
-    val_nuevas <- reactive({ n_distinct(df_nuevas()$LinNegCod, df_nuevas()$CliNitPpal) })
+
+    val_activas <- reactive({
+      df_cohorte_vig() %>%
+        filter(EstadoPanel == "ACTIVO") %>%
+        { n_distinct(.$LinNegCod, .$CliNitPpal) }
+    })
+    val_recuperar <- reactive({
+      df_cohorte_vig() %>%
+        filter(EstadoPanel == "INACTIVO") %>%
+        { n_distinct(.$LinNegCod, .$CliNitPpal) }
+    })
+    val_nuevas <- reactive({
+      df_cohorte_vig() %>%
+        filter(EstadoPanel == "NUEVO") %>%
+        { n_distinct(.$LinNegCod, .$CliNitPpal) }
+    })
     val_leads <- reactive({ n_distinct(df_leads()$PerRazSoc) })
     val_oportunidades <- reactive({
       n_distinct(
@@ -286,41 +303,50 @@ ResumenTotal <- function(id, dat, dat_t, dat_c, dat_leads, dat_oportunidades, da
               footer_class = "caja-modal-footer")
     
     ## Cajas KPI UC ----
-    .caja_std(id = "kpi_activas",
-              valor_r = val_activas,
-              texto = "Clientes Activos",
-              icono = "users",
-              titulo_modal = "Detalle \u2014 Clientes Activos",
-              ui_modal_fn = function() DetalleClienteUI(ns("detalle_activas")),
-              footer_r = reactive({paste0(
-                "UC clasificadas como CLIENTE en la segmentaci\u00f3n del ",
-                format(corte_mes(), "%d/%m/%Y"), "."
-              )})
-              )
+    .caja_std(
+      id         = "kpi_activas",
+      valor_r    = val_activas,
+      texto      = "Clientes Activos",
+      icono      = "users",
+      titulo_modal = "Detalle \u2014 Clientes Activos",
+      ui_modal_fn  = function() DetalleClienteUI(ns("detalle_activas")),
+      footer_r   = reactive({
+        paste0(
+          "UC con estado ACTIVO en cohortes al ",
+          format(max(df_cohorte_vig()$FecProceso), "%d/%m/%Y"), "."
+        )
+      })
+    )
     
-    .caja_std(id = "kpi_recuperar",
-              valor_r = val_recuperar,
-              texto = "Clientes a Recuperar",
-              icono = "user-clock",
-              titulo_modal = "Detalle \u2014 Clientes a Recuperar",
-              ui_modal_fn = function() DetalleClienteRecuperarUI(ns("detalle_recuperar")),
-              footer_r = reactive({paste0(
-                "UC clasificadas como CLIENTE A RECUPERAR en la segmentaci\u00f3n del ",
-                format(corte_mes(), "%d/%m/%Y"), "."
-              )})
-              )
+    .caja_std(
+      id         = "kpi_recuperar",
+      valor_r    = val_recuperar,
+      texto      = "Clientes a Recuperar",
+      icono      = "user-clock",
+      titulo_modal = "Detalle \u2014 Clientes a Recuperar",
+      ui_modal_fn  = function() DetalleClienteRecuperarUI(ns("detalle_recuperar")),
+      footer_r   = reactive({
+        paste0(
+          "UC con estado INACTIVO en cohortes al ",
+          format(max(df_cohorte_vig()$FecProceso), "%d/%m/%Y"), "."
+        )
+      })
+    )
     
-    .caja_std(id = "kpi_nuevas",
-              valor_r = val_nuevas,
-              texto = "Clientes Nuevos",
-              icono = "user-plus",
-              titulo_modal = "Detalle \u2014 Clientes Nuevos",
-              ui_modal_fn = function() DetalleClienteNuevoUI(ns("detalle_nuevas")),
-              footer_r = reactive({paste0(
-                "UC con factura en ", .mes_es(Sys.Date()),
-                " sin registro previo en CRMNALSEGR ni en el historial de facturaci\u00f3n."
-              )})
-              )
+    .caja_std(
+      id         = "kpi_nuevas",
+      valor_r    = val_nuevas,
+      texto      = "Clientes Nuevos",
+      icono      = "user-plus",
+      titulo_modal = "Detalle \u2014 Clientes Nuevos",
+      ui_modal_fn  = function() DetalleClienteNuevoUI(ns("detalle_nuevas")),
+      footer_r   = reactive({
+        paste0(
+          "UC incorporadas como NUEVO en cohortes durante ",
+          .mes_es(max(df_cohorte_vig()$FecProceso)), "."
+        )
+      })
+    )
     
     ## Cajas KPI Comercial ----
     .caja_std(id = "kpi_leads",
