@@ -166,14 +166,19 @@ cargar_fact <- function() {
                                             GROUP BY F1.FctLot")
   
   fact_margenes <- Consulta("SELECT LOTE AS CLLotCod,
+                                    MAX(FECFACTURA) AS FechaFactura,
                                     SUM(MARGEN)     AS Margen,
-                                    SUM(SACOS70) AS SacosPYG
-                            FROM   CRMNALMARLOT
-                            GROUP  BY LOTE")
+                                    SUM(SACOS70)    AS SacosPYG
+                            FROM CRMNALMARLOT
+                            GROUP BY LOTE") %>% 
+    mutate(FechaFactura = as.Date(FechaFactura))
   
   bind_rows(fact_sys_nal, fact_sys_ext) %>% 
-    left_join(fact_margenes, by = "CLLotCod") %>%
-    filter(FecFact >= as.Date("2020-01-01")) %>%
+    full_join(fact_margenes, by = "CLLotCod") %>%
+    mutate(FecFact = if_else(is.na(FecFact), FechaFactura, FecFact),
+           FecPrimerFact = if_else(is.na(FecPrimerFact), FechaFactura, FecPrimerFact)) %>% 
+    filter(FecPrimerFact >= as.Date("2020-01-01")) %>%
+    select(-FechaFactura) %>% 
     mutate(Facturado = TRUE, FecFact = as.Date(FecFact))
 }
 
@@ -395,11 +400,22 @@ FACT <- bind_rows(ConsultaSistema("syscafe",
   left_join(CREACION,  by = c("FctNit" = "PerCod") )
 
 # Construccion del cuadro de datos principal
+
+# adicion de lotes que estan en PYG y no el lotes_raw
+lotes_pyg_faltantes <- CargarDatos("CRMNALMARLOT") %>%
+  filter(FECFACTURA >= as.Date("2026-01-01")) %>%
+  rename(CLLotCod = LOTE) %>%
+  anti_join(lotes_raw, by = "CLLotCod") %>% 
+  select(CLSucCod = SUCURSAL,
+         CLLotCod, 
+         CLCliNit = CLIENTE, 
+         LinNegCod = LINNEG)
+
 data <- lotes_raw %>%
+  bind_rows(lotes_pyg_faltantes) %>% 
   left_join(sucs, by = c("CLSucCod" = "SucCod")) %>%
   left_join(NITPPAL, by = c("CLCliNit" = "PerCod")) %>%
   mutate(CliNitPpal = ifelse(is.na(CliNitPpal), CLCliNit, CliNitPpal)) %>%
-  # Solo NITs principales para evitar duplicados por subsidiarias
   left_join(NCLIENTE %>% filter(PerCod == CliNitPpal) %>% select(-PerCod),
             by = "CliNitPpal") %>%
   left_join(ped, by = c("CLPdcCod" = "PdcCod", "CLPdcLin" = "PdcLin")) %>%
@@ -415,8 +431,9 @@ data <- lotes_raw %>%
   group_by(CLLinNegNo) %>%
   mutate(MarKilo = ifelse(is.na(MarKilo), mean(MarKilo, na.rm = TRUE), MarKilo)) %>%
   ungroup() %>%
-  mutate(Margen = ifelse(is.na(Margen),
-                         MarKilo * SacLote * ifelse(LinNegCod == 10000L, 62.5, 70),
+  mutate(SacosPYG = ifelse(is.na(SacosPYG), SacFact70, SacosPYG),
+         Margen = ifelse(is.na(Margen),
+                         MarKilo * (SacosPYG * 70),
                          Margen),
          FechaEmbarque = as.Date(paste(Periodo, "01"), "%Y%m%d"),
          across(contains("Fec"), ~ if_else(as.Date(.) == as.Date("1753-01-01"), as.Date(NA), as.Date(.))),
@@ -432,7 +449,7 @@ data <- lotes_raw %>%
   select(CLSucCod, Sucursal, CLLotCod, FechaEmbarque, CLPdcCod, PdcPrecioKilo, 
          PdcRefCli, PdcFecCre, CLPdcLin, CLPdcCntCl, Usuario, SacLote, FecAsignLote,
          CodOrdTril, FecOrdTril, SacProd, FecProd, CodDesp, FecDesp, SacDesp,
-         FecFact, KilosFact, SacosFact, SacFact70, Margen, SacosPYG, MarKilo, UMeFac, Kilos,
+         FecFact = FecPrimerFact, KilosFact, SacosFact, SacFact70, Margen, SacosPYG, MarKilo, UMeFac, Kilos,
          LinNegCod, CLLinNegNo, LinProCod, MCCod, MrcCod, CLPdcFctAD, SacFact, CLPdcCanFa,
          CliNitPpal, CLCliNit, PerRazSoc, CliCont, CliDir, CliDir1, CliTel, CliConCom, CliTelCom, 
          CliEmlCom, CiuExtNom, CLLotSacXP, CLLotPenXD, CLLotDesXF, PendProducir, PendDespachar, PendFacturar) %>%

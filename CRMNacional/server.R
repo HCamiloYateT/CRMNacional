@@ -744,6 +744,22 @@ server <- function(input, output, session) {
     )
   })
   
+  ### Descarga Clientes ----
+  output$FT_DescargarClientes <- downloadHandler(
+    filename = function() {
+      paste0("Clientes_",format(Sys.Date(), "%Y%m%d"), ".xlsx")
+    },
+    content = function(file) {
+      
+      datos <- CargarDatos("CRMNALCLIENTE")
+      
+      wb <- openxlsx::createWorkbook()
+      
+      openxlsx::addWorksheet(wb, sheetName = "Clientes")
+      openxlsx::writeData(wb, sheet = "Clientes", x = datos)
+      openxlsx::saveWorkbook(wb, file, overwrite = TRUE)
+    }
+  )
   ### Menú de Indicadores ----
   IndicadoresServer("ind_kpis", dat = data_ind)
   res_ind <- MenuHeaderServer(
