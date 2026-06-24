@@ -406,8 +406,11 @@ lotes_pyg_faltantes <- CargarDatos("CRMNALMARLOT") %>%
   filter(FECFACTURA >= as.Date("2026-01-01")) %>%
   rename(CLLotCod = LOTE) %>%
   anti_join(lotes_raw, by = "CLLotCod") %>% 
+  mutate(CLLinNegNo = ifelse(LINNEG== 10000, "CONVENCIONALES", "A LA MEDIDA")) %>% 
   select(CLSucCod = SUCURSAL,
          CLLotCod, 
+         LinProCod = LINNEG,
+         CLLinNegNo,
          CLCliNit = CLIENTE, 
          LinNegCod = LINNEG)
 

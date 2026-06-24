@@ -74,35 +74,49 @@ customDropdownMenu <-  function(..., badgeStatus = NULL, icon = NULL,
 # Datos ----
 
 cargar_fact <- function() {
-  fact_sys <- ConsultaSistema(
-    "syscafe",
-    query = "SELECT F1.FcnLot      AS CLLotCod,
-                    F2.FcnTip,
-                    MIN(F2.FcnFec) AS FecPrimerFact,
-                    MAX(F2.FcnFec) AS FecFact,
-                    SUM(F1.FcnKilLot)         AS KilosFact,
-                    SUM(F1.FcnSacLot)         AS SacosFact,
-                    SUM(F1.FcnKilLot / 70)    AS SacFact70
-             FROM   FCTFACN1 F1
-             LEFT   JOIN FCTFACNA F2 ON F1.FcnNum = F2.FcnNum
-             WHERE  F1.CiaCod = 10
-               AND  F2.CiaCod = 10
-               AND  F2.FcnEtd = 'C'
-             GROUP  BY F1.FcnLot, F2.FcnTip"
-  )
-  fact_margenes <- Consulta(
-    "SELECT LOTE            AS CLLotCod,
-            SUM(MARGEN)     AS Margen,
-            SUM(KILOS / 70) AS SacosPYG
-     FROM   CRMNALMARLOT
-     WHERE  TIP = 'NAL'
-     GROUP  BY LOTE"
-  )
-  fact_sys %>%
-    left_join(fact_margenes, by = "CLLotCod") %>%
-    filter(FecFact >= as.Date("2020-01-01")) %>%
+  fact_sys_nal <- ConsultaSistema("syscafe",
+                                  query = "SELECT F1.FcnLot      AS CLLotCod,
+                                              MIN(F2.FcnFec) AS FecPrimerFact,
+                                              MAX(F2.FcnFec) AS FecFact,
+                                              SUM(F1.FcnKilLot)         AS KilosFact,
+                                              SUM(F1.FcnSacLot)         AS SacosFact,
+                                              SUM(F1.FcnKilLot / 70.)    AS SacFact70
+                                       FROM   FCTFACN1 F1
+                                       LEFT   JOIN FCTFACNA F2 ON F1.FcnNum = F2.FcnNum
+                                       WHERE  F1.CiaCod = 10 AND  
+                                              F2.CiaCod = 10 AND  
+                                              F2.FcnEtd = 'C'
+                                      GROUP  BY F1.FcnLot")
+  fact_sys_ext <- ConsultaSistema("syscafe",
+                                  query = "SELECT F1.FctLot AS CLLotCod,
+                                                   MIN(F2.FctFec)         AS FecPrimerFact,
+                                                   MAX(F2.FctFec)         AS FecFact,
+                                                   SUM(F1.FctKilLot)      AS KilosFact,
+                                                   SUM(F1.FctSacEmb)      AS SacosFact,
+                                                   SUM(F1.FctKilLot / 70.) AS SacFact70
+                                            FROM FCTFACC2 F1
+                                            LEFT JOIN FCTFACCA F2 ON F1.FctNum = F2.FctNum
+                                            WHERE F1.CiaCod = 10 AND 
+                                                  F2.CiaCod = 10 AND
+                                                  F1.FctLotAnu <> 'S'
+                                            GROUP BY F1.FctLot")
+  
+  fact_margenes <- Consulta("SELECT LOTE AS CLLotCod,
+                                    MAX(FECFACTURA) AS FechaFactura,
+                                    SUM(MARGEN)     AS Margen,
+                                    SUM(SACOS70)    AS SacosPYG
+                            FROM CRMNALMARLOT
+                            GROUP BY LOTE") %>% 
+    mutate(FechaFactura = as.Date(FechaFactura))
+  
+  bind_rows(fact_sys_nal, fact_sys_ext) %>% 
+    full_join(fact_margenes, by = "CLLotCod") %>%
+    mutate(FecFact = if_else(is.na(FecFact), FechaFactura, FecFact),
+           FecPrimerFact = if_else(is.na(FecPrimerFact), FechaFactura, FecPrimerFact)) %>% 
+    filter(FecPrimerFact >= as.Date("2020-01-01")) %>%
+    select(-FechaFactura) %>% 
     mutate(Facturado = TRUE, FecFact = as.Date(FecFact))
-} 
+}
 .lotes_activos_sql <- function(anho_corte) {
   ConsultaSistema(
     "syscafe",

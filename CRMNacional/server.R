@@ -9,11 +9,10 @@ server <- function(input, output, session) {
     "NO PODEMOS PERDERLOS", "HIBERNANDO", "PERDIDOS", "NUEVOS EN BASE", "OTROS"
   )
   
-  # Columnas de facturación horneadas en datos_rv() que se reemplazan con fuente viva
-  .cols_fact_stale <- c(
-    "FcnTip", "FecPrimerFact", "FecFact", "KilosFact",
-    "SacosFact", "SacFact70", "Margen", "SacosPYG", "Facturado", "MarKilo"
-  )
+  # Columnas de facturación de datos_rv() que se reemplazan con fuente viva
+  .cols_fact_stale <- c("FecFact", "KilosFact", "SacosFact", "SacFact70",
+                        "Margen", "SacosPYG", "Facturado", "MarKilo"
+                        )
   
   # Factory de cache con invalidación, actualización manual y TTL opcional en minutos
   create_cache <- function(loader_fn, process_fn = NULL, ttl_mins = NULL) {
@@ -143,7 +142,7 @@ server <- function(input, output, session) {
   })
   
   filtros <- FiltrosServer("Filtros", usuario, productos_cache)
-  # [DEBUG] observe({ f <- filtros(); assign("f", f, envir = .GlobalEnv) })
+  observe({ f <- filtros(); assign("f", f, envir = .GlobalEnv) })  # [DEBUG]
   
   # Valores reactivos base cargados desde DataPrep
   datos_rv    <- reactiveVal(data)
@@ -247,13 +246,11 @@ server <- function(input, output, session) {
       dat %>%
         group_by(CLLotCod) %>%
         summarise(
-          FcnTip        = first(FcnTip),
           FecPrimerFact = min(FecPrimerFact, na.rm = TRUE),
           FecFact       = max(FecFact,       na.rm = TRUE),
           KilosFact     = sum(KilosFact,     na.rm = TRUE),
           SacosFact     = sum(SacosFact,     na.rm = TRUE),
           SacFact70     = sum(SacFact70,     na.rm = TRUE),
-          # NA cuando todos los registros del lote son NA: preserva imputación jerárquica
           Margen   = if_else(all(is.na(Margen)),   NA_real_, sum(Margen,   na.rm = TRUE)),
           SacosPYG = if_else(all(is.na(SacosPYG)), NA_real_, sum(SacosPYG, na.rm = TRUE)),
           Facturado = any(coalesce(Facturado, FALSE)),
@@ -436,10 +433,14 @@ server <- function(input, output, session) {
   
   ## Lotes enriquecidos: reactivo pesado, invalida solo con cambios de datos base ----
   data_lotes_enriquecidos <- reactive({
-    datos_rv() %>%
-      select(-any_of(.cols_fact_stale)) %>%
-      left_join(pend_cache$get(), by = c("CLSucCod", "CLLotCod")) %>%
-      left_join(fact_cache$get(), by = "CLLotCod") %>%
+      tt <- datos_rv() %>%
+        select(-any_of(.cols_fact_stale)) %>%
+        left_join(pend_cache$get(), by = c("CLSucCod", "CLLotCod")) %>%
+        left_join(
+          # Renombrar para mantener convención DataPrep: FecFact = primera factura
+          fact_cache$get() %>% rename(FecFact = FecPrimerFact, FecUltFact = FecFact),
+          by = "CLLotCod"
+        ) %>%
       # Imputación jerárquica de margen por kilo (4 niveles), idéntica a DataPrep
       mutate(MarKilo = Margen / KilosFact) %>%
       group_by(CLCliNit, CLLinNegNo, LinProCod, MCCod, MrcCod) %>%
@@ -451,13 +452,11 @@ server <- function(input, output, session) {
       group_by(CLLinNegNo) %>%
       mutate(MarKilo = ifelse(is.na(MarKilo), mean(MarKilo, na.rm = TRUE), MarKilo)) %>%
       ungroup() %>%
-      mutate(
-        Margen = ifelse(
-          is.na(Margen),
-          MarKilo * SacLote * ifelse(LinNegCod == 10000L, 62.5, 70),
-          Margen
-        ),
-        PendProducir  = SacLote - coalesce(CLLotSacPr, 0),
+      mutate(SacosPYG = ifelse(is.na(SacosPYG), SacFact70, SacosPYG),
+             Margen = ifelse(is.na(Margen),
+                             MarKilo * (SacosPYG * 70),
+                             Margen),
+             PendProducir  = SacLote - coalesce(CLLotSacPr, 0),
         PendDespachar = pmax(SacLote - pmax(coalesce(CLLotSacDe, 0), 0), 0),
         PendFacturar  = SacLote - pmax(PendDespachar, 0) - coalesce(CLLotSacFa, 0),
         # Patch: FCTFACN1 ya registró la factura pero EXPCUALO aún no refleja el cambio
@@ -480,6 +479,7 @@ server <- function(input, output, session) {
         by = c("LinNegCod", "LinProCod", "MCCod", "MrcCod")
       )
   })
+  observeEvent(data_lotes_enriquecidos(), { assign("BaseDatos_e", data_lotes_enriquecidos(), envir = .GlobalEnv) }) #[DEBUG] 
   
   ## data_c: enriquecimiento por cliente y periodo ----
   # Sin preloader: reactivo intermedio; el waiter pertenece únicamente a data_f()
@@ -521,14 +521,12 @@ server <- function(input, output, session) {
     f <- filtros()
     req(data_c(), f$asesor, f$segmento, f$linneg, f$categoria, f$producto)
     data_c() %>%
-      filter(
-        Excluir    != "SI",
-        Asesor     %in% f$asesor,
-        Segmento   %in% f$segmento,
-        CLLinNegNo %in% f$linneg,
-        Categoria  %in% f$categoria,
-        Producto   %in% f$producto
-      )
+      filter(Excluir    != "SI",
+             Asesor     %in% f$asesor,
+             Segmento   %in% f$segmento,
+             CLLinNegNo %in% f$linneg,
+             Categoria  %in% f$categoria,
+             Producto   %in% f$producto)
   })
   observeEvent(data_t(), { assign("BaseDatos_t", data_t(), envir = .GlobalEnv) }) # [DEBUG]
   
@@ -746,18 +744,26 @@ server <- function(input, output, session) {
   
   ### Descarga Clientes ----
   output$FT_DescargarClientes <- downloadHandler(
-    filename = function() {
-      paste0("Clientes_",format(Sys.Date(), "%Y%m%d"), ".xlsx")
-    },
-    content = function(file) {
+    filename = function() paste0("Clientes_", Sys.Date(), ".xlsx"),
+    content  = function(file) {
+      # Snapshot más reciente por cliente y línea desde cache centralizado
+      snap <- clientes_raw_cache$get() %>%
+        .snapshot_max(LinNegCod, CLCliNit)
       
-      datos <- CargarDatos("CRMNALCLIENTE")
+      # Razón social desde NCLIENTE: join por CLCliNit = PerCod
+      razon_social <- ncliente_rv() %>%
+        select(PerCod, PerRazSoc) %>%
+        distinct()
       
-      wb <- openxlsx::createWorkbook()
+      df <- snap %>%
+        left_join(razon_social, by = c("CLCliNit" = "PerCod"))
       
-      openxlsx::addWorksheet(wb, sheetName = "Clientes")
-      openxlsx::writeData(wb, sheet = "Clientes", x = datos)
-      openxlsx::saveWorkbook(wb, file, overwrite = TRUE)
+      tryCatch(
+        openxlsx2::write_xlsx(df, file),
+        error = function(e) showNotification(
+          paste("Error al generar descarga:", e$message), type = "error"
+        )
+      )
     }
   )
   ### Menú de Indicadores ----
@@ -1258,10 +1264,10 @@ server <- function(input, output, session) {
                data_cohortes = data_cohortes, segmentos_raw = reactive(segmentos_raw_cache$get()),
                fact_r = fact_rv, 
                usr = usuario, trigger_update = trigger_update_opt)
-  # ComparacionIndicadores("CompIndicadores", data_ind)
-  # Calculadora("Calculadoras",     data_ind, usuario)
-  # Presupuesto("PresupuestoTotal", data_t,   clientes_raw)
-  # Pendientes("Pendientes",        data_f,   ped_sinlote, usuario)
+  ComparacionIndicadores("CompIndicadores", data_ind)
+  Calculadora("Calculadoras",     data_ind, usuario)
+  Presupuesto("PresupuestoTotal", data_t,   clientes_raw)
+  Pendientes("Pendientes",        data_f,   ped_sinlote, usuario)
   
   ### Oportunidades ----
   FormularioOportunidad("Formulario", dat = data_c, usr = usuario,
