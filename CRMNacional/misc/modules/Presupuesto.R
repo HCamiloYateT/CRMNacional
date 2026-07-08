@@ -396,11 +396,10 @@ Presupuesto <- function(id, dat, clientes_raw) {
     # Presupuesto mensual: ultimo proceso del anio por cliente/linea
     obtener_presupuesto <- function(data, clientes, periodo) {
       clientes() %>%
-        filter(year(FecProceso) == year(Sys.Date())) %>%
-        group_by(LinNegCod, CliNitPpal) %>%
-        filter(FecProceso == max(FecProceso)) %>%
-        slice(1L) %>%
-        ungroup() %>%
+        mutate(FecProceso = as.Date(FecProceso)) %>% 
+        group_by(LinNegCod,  CliNitPpal) %>% 
+        filter(FecProceso == max(FecProceso))  %>% 
+        ungroup() %>% 
         inner_join(
           data %>% distinct(LinNegCod, Segmento, Asesor),
           by = join_by(LinNegCod, Segmento, Asesor)
@@ -417,10 +416,9 @@ Presupuesto <- function(id, dat, clientes_raw) {
     # Snapshot de presupuesto con dimensiones extendidas
     obtener_presupuesto_dim <- function(data, clientes, periodo) {
       clientes() %>%
-        filter(year(FecProceso) == year(Sys.Date())) %>%
-        group_by(LinNegCod, CliNitPpal) %>%
-        filter(FecProceso == max(FecProceso)) %>%
-        slice(1L) %>%
+        mutate(FecProceso = as.Date(FecProceso)) %>% 
+        group_by(LinNegCod,  CliNitPpal) %>% 
+        filter(FecProceso == max(FecProceso))  %>% 
         ungroup() %>%
         inner_join(
           data %>% distinct(LinNegCod, Segmento, Asesor),

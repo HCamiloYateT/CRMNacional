@@ -805,6 +805,20 @@ server <- function(input, output, session) {
     bs4Dash::updateTabItems(session, "menu_principal", selected = "HT_Tareas")
   })
   
+  ### Control de Botones ----
+  observe({
+    es_admin <- toupper(trimws(usuario())) == "JONATHAN CAÑON"
+    
+    if (es_admin) {
+      shinyjs::show("li_menu_clientes")
+      shinyjs::show("li_menu_clientes_ant")
+      shinyjs::show("li_menu_productos")
+    } else {
+      shinyjs::hide("li_menu_clientes")
+      shinyjs::hide("li_menu_clientes_ant")
+      shinyjs::hide("li_menu_productos")
+    }
+  })
   ### Clientes sin información ----
   
   # Clientes activos sin registro en CRMNALCLIENTE
@@ -1237,7 +1251,7 @@ server <- function(input, output, session) {
   
   # Módulos ----
   
-  ## Encabezado ----
+  ## Control Bar ----
   persona_r <- reactive({
     Unicos(c(data_c()$PerRazSoc, data_leads_f()$PerRazSoc))
   })

@@ -15,15 +15,25 @@ header <- bs4DashNavbar(status = "white", border = FALSE, sidebarIcon = icon("ba
                                                              color_hover = "#DA291C")
                                   )
                           ),
-                        rightUi = tagList(MenuHeaderUI("MenuIndicadores", icon = shiny::icon("arrow-trend-up"), 
+                        rightUi = tagList(MenuHeaderUI("MenuIndicadores", icon = shiny::icon("arrow-trend-up"),
                                                        min_width = "400px", title = "Indicadores"),
-                                          MenuHeaderUI("MenuTareas", icon = shiny::icon("bars-progress"), 
+                                          MenuHeaderUI("MenuTareas", icon = shiny::icon("bars-progress"),
                                                        min_width = "360px", title = "Tareas"),
-                                          MenuHeaderUI("MenuClientes", icon = shiny::icon("users"), 
-                                                       min_width = "360px", title = "Clientes sin información"),
-                                          MenuHeaderUI("MenuClientesAnt", icon = shiny::icon("user-clock"), 
-                                                       min_width = "360px", title = "Clientes con Información antigüa"),
-                                          MenuHeaderUI("MenuProductos", icon = shiny::icon("delicious"), 
-                                                       min_width = "360px", title = "Productos")
+                                          # Restringidos a JONATHAN CAÑON — id añadido para toggle server-side ----
+                                          htmltools::tagAppendAttributes(
+                                            MenuHeaderUI("MenuClientes", icon = shiny::icon("users"),
+                                                         min_width = "360px", title = "Clientes sin información"),
+                                            id = "li_menu_clientes"
+                                            ),
+                                          htmltools::tagAppendAttributes(
+                                            MenuHeaderUI("MenuClientesAnt", icon = shiny::icon("user-clock"),
+                                                         min_width = "360px", title = "Clientes con Información antigüa"),
+                                            id = "li_menu_clientes_ant"
+                                            ),
+                                          htmltools::tagAppendAttributes(
+                                            MenuHeaderUI("MenuProductos", icon = shiny::icon("delicious"),
+                                                         min_width = "360px", title = "Productos"),
+                                            id = "li_menu_productos"
+                                            )
                                           )
                         )

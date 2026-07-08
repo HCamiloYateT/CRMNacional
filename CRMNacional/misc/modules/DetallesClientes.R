@@ -1,1112 +1,672 @@
 # Helpers Detalle Clientes ----
+# dat()  = dat_c() filtrado por semi_join con NITs del segmento (desde ResumenTotal)
+# nits() = tibble derivado de CRMNALSEGR (segr_corte) con columnas:
+#          LinNegCod, CliNitPpal, Segmento, Asesor, Presupuestado, UltFecFact, FecProceso
+# FUENTE UNICA: conteos de cajas y totales del detalle parten de los mismos nits().
 
-# Carga y preprocesa CRMNALSEGR: limpieza, cast de fechas y resumen Antes/Ahora por cliente.
-# NOTA: usado únicamente en módulos externos; los módulos de UC no lo requieren porque
-# dat() llega pre-filtrado desde ResumenTotal con el universo correcto.
-dc_cargar_segr <- function() {
-  CargarDatos("CRMNALSEGR") %>%
-    mutate(
-      FecProceso = as.Date(FecProceso),
-      across(where(is.numeric),   ~ ifelse(is.na(.), 0, .)),
-      across(where(is.character), ~ ifelse(is.na(.) | . == "N/A", "", .))
-    ) %>%
-    filter(FecProceso >= PrimerDia(Sys.Date()) - months(1)) %>%
-    group_by(LinNegCod, CliNitPpal) %>%
-    arrange(FecProceso) %>%
-    summarise(Antes = first(SegmentoRacafe), Ahora = last(SegmentoRacafe), .groups = "drop")
+# Helpers de formato ----
+.fmt_sacos <- function(v) {
+  if (is.na(v) || is.infinite(v)) return("\u2014")
+  format(round(v, 1), big.mark = ".", decimal.mark = ",", scientific = FALSE, nsmall = 1)
+}
+.fmt_margen <- function(v) {
+  if (is.na(v) || is.infinite(v)) return("\u2014")
+  paste0("$", format(round(v), big.mark = ".", decimal.mark = ",", scientific = FALSE))
+}
+.fmt_pct <- function(v) {
+  if (is.na(v) || is.infinite(v)) return("\u2014")
+  paste0(round(v * 100, 1), "%")
+}
+.style_cumpl <- function(v) {
+  if (is.na(v) || is.infinite(v)) return(NULL)
+  list(background = dplyr::case_when(v >= 1.00 ~ "#D5F5E3",
+                                     v >= 0.80 ~ "#FCF3CF", TRUE ~ "#FADBD8"),
+       fontWeight = "600")
 }
 
-# Calcula ejecución mensual y YTD por cliente desde datos de facturación filtrados
+# Boton oportunidad identico al de dc_coldefs_comunes original
+.btn_oportunidad <- function(v) {
+  if (is.na(v) || v == "") return("")
+  as.character(tags$span(
+    style = paste0(
+      "display:inline-flex; align-items:center; justify-content:center;",
+      "width:28px; height:28px; border-radius:6px;",
+      "background:#C11007; color:white; font-size:13px; cursor:pointer;"
+    ),
+    icon("hand-holding-dollar")
+  ))
+}
+
+# Ejecucion mensual y YTD desde dat_c() filtrado
 dc_ejecucion <- function(dat_df) {
+  corte <- PrimerDia(Sys.Date())
+  anio  <- year(Sys.Date())
   dat_df %>%
     group_by(LinNegCod, CliNitPpal) %>%
     summarise(
-      SacosMes  = sum(
-        ifelse(PrimerDia(FecFact) == PrimerDia(Sys.Date()), SacFact70, 0), na.rm = TRUE
-      ),
-      MargenMes = sum(
-        ifelse(PrimerDia(FecFact) == PrimerDia(Sys.Date()), Margen, 0),    na.rm = TRUE
-      ),
-      SacosYTD  = sum(
-        ifelse(year(FecFact) == year(Sys.Date()), SacFact70, 0), na.rm = TRUE
-      ),
-      MargenYTD = sum(
-        ifelse(year(FecFact) == year(Sys.Date()), Margen, 0),    na.rm = TRUE
-      ),
-      .groups = "drop"
+      SacosMes  = sum(ifelse(PrimerDia(FecFact) == corte, SacFact70, 0), na.rm = TRUE),
+      MargenMes = sum(ifelse(PrimerDia(FecFact) == corte, Margen,    0), na.rm = TRUE),
+      SacosYTD  = sum(ifelse(year(FecFact) == anio,       SacFact70, 0), na.rm = TRUE),
+      MargenYTD = sum(ifelse(year(FecFact) == anio,       Margen,    0), na.rm = TRUE),
+      .groups   = "drop"
     )
 }
 
-# Calcula primera y última fecha de facturación por cliente desde el historial completo.
-# CORRECCIÓN: guardia defensiva sobre el global `data`; retorna tibble vacío si el objeto
-# no existe o carece del esquema esperado (p. ej. tras refactorización de cargar_datos_base).
-# DEUDA TÉCNICA: dat_hist debe llegar como reactivo desde el módulo padre (FACT completo).
-# Próximo paso: añadir parámetro dat_hist a los módulos y eliminiar la dependencia global.
-dc_fechas_fact <- function(dat_hist = NULL) {
-  df <- if (!is.null(dat_hist)) {
-    dat_hist
-  } else {
-    tryCatch({
-      d <- get("data", envir = .GlobalEnv)
-      if (!is.data.frame(d) || !("CliNitPpal" %in% names(d))) stop("esquema inválido")
-      d
-    }, error = function(e) NULL)
-  }
-  if (is.null(df)) {
-    return(tibble::tibble(
-      LinNegCod  = character(),
-      CliNitPpal = character(),
-      PrimFact   = as.Date(NA_character_),
-      UltFact    = as.Date(NA_character_)
-    ))
-  }
-  df %>%
-    filter(!is.na(FecFact)) %>%
-    group_by(LinNegCod, CliNitPpal) %>%
-    summarise(
-      PrimFact = min(FecFact, na.rm = TRUE),
-      UltFact  = max(FecFact, na.rm = TRUE),
-      .groups = "drop"
-    )
-}
-
-# Normaliza presupuesto a base mensual y calcula acumulado proporcional al mes actual
-dc_ppto_normalizar <- function(df, mes) {
-  df %>%
+# Presupuesto mensualizado — PptoSacos y PptoMargen vienen de ctx (dat_t sin filtro fechas).
+# dat_t() contiene el join con CRMNALCLIENTE que aporta las columnas de presupuesto.
+dc_ppto <- function(ctx_df) {
+  mes <- month(Sys.Date())
+  ctx_df %>%
+    select(LinNegCod, CliNitPpal, PptoSacos, PptoMargen) %>%
+    distinct() %>%
     mutate(
-      ConPpto       = ifelse(PptoSacos > 0, "CON PRESUPUESTO", "SIN PRESUPUESTO"),
-      PptoSacos     = PptoSacos / 12,
-      PptoMargen    = PptoMargen / 12,
-      PptoSacosYTD  = PptoSacos * mes,
-      PptoMargenYTD = PptoMargen * mes
+      PptoSacosMes  = PptoSacos  / 12,
+      PptoMargenMes = PptoMargen / 12,
+      PptoSacosYTD  = PptoSacos  / 12 * mes,
+      PptoMargenYTD = PptoMargen / 12 * mes
     )
 }
 
-# Agrega métricas de cumplimiento mensual, acumulado, proyección y etiquetas al df
-dc_metricas_cumpl <- function(df, mes_falt, lbl_acum) {
-  df %>%
-    mutate(
-      ConPpto = if ("ConPpto" %in% names(df)) {
-        ifelse(is.na(ConPpto), "SIN PRESUPUESTO", ConPpto)
-      } else {
-        "SIN PRESUPUESTO"
-      },
-      SacosCumpPpto  = pmax(
-        ((PptoSacosYTD - SacosYTD) +
-           ((PptoSacos * 12) - PptoSacosYTD)) / mes_falt, 0
-      ),
-      MargenCumpPpto = pmax(
-        ((PptoMargenYTD - MargenYTD) +
-           ((PptoMargen * 12) - PptoMargenYTD)) / mes_falt, 0
-      ),
-      SacosMes  = ifelse(is.na(SacosMes),  0, SacosMes),
-      MargenMes = ifelse(is.na(MargenMes), 0, MargenMes),
-      SacosYTD  = ifelse(is.na(SacosYTD),  0, SacosYTD),
-      MargenYTD = ifelse(is.na(MargenYTD), 0, MargenYTD),
-      CumpSacosMes   = SacosMes  / PptoSacos,
-      CumpMargenMes  = MargenMes / PptoMargen,
-      CumpSacosYTD   = SacosYTD  / PptoSacosYTD,
-      CumpMargenYTD  = MargenYTD / PptoMargenYTD,
-      LblAcum        = lbl_acum,
-      Oportunidad    = "Crear"
-    )
-}
-
-# Construye fila de totales agregados para bind_rows en data_tabla
-dc_fila_total <- function(df) {
-  s <- function(col) sum(df[[col]], na.rm = TRUE)
-  d <- function(num, den) if (den > 0) num / den else NA_real_
-  tibble::tibble(
-    Oportunidad    = "",
-    PerRazSoc      = "TOTAL",
-    CLLinNegNo     = "",
-    ConPpto        = "",
-    Segmento       = "",
-    UltFact        = as.Date(NA),
-    PptoSacos      = s("PptoSacos"),
-    SacosMes       = s("SacosMes"),
-    CumpSacosMes   = d(s("SacosMes"),   s("PptoSacos")),
-    PptoMargen     = s("PptoMargen"),
-    MargenMes      = s("MargenMes"),
-    CumpMargenMes  = d(s("MargenMes"),  s("PptoMargen")),
-    PptoSacosYTD   = s("PptoSacosYTD"),
-    SacosYTD       = s("SacosYTD"),
-    CumpSacosYTD   = d(s("SacosYTD"),   s("PptoSacosYTD")),
-    PptoMargenYTD  = s("PptoMargenYTD"),
-    MargenYTD      = s("MargenYTD"),
-    CumpMargenYTD  = d(s("MargenYTD"),  s("PptoMargenYTD")),
-    SacosCumpPpto  = s("SacosCumpPpto"),
-    MargenCumpPpto = s("MargenCumpPpto"),
-    LblAcum        = ""
-  )
-}
-
-# Gráfico de barras con resaltado del filtro activo; niveles permite ordenar el eje X
-dc_grafico <- function(df, columna, source_name, filtro_activo, niveles = NULL) {
-  if (nrow(df) == 0) {
-    return(
-      plotly_empty(type = "bar") %>%
-        layout(title = list(text = "Sin datos disponibles", font = list(size = 14)))
-    )
-  }
+# Mini-tabla resumen HTML con N y porcentaje.
+# CORRECCION: ancho de barra proporcional al maximo de la columna (no acumulado).
+dc_tabla_resumen <- function(df, columna, titulo, filtro_activo = NULL,
+                             niveles = NULL, ns_id) {
+  if (nrow(df) == 0)
+    return(div(style = "padding:12px;color:#6B7280;font-size:12px;font-style:italic;",
+               "Sin datos disponibles."))
+  
+  datos <- df %>%
+    count(Cat = !!sym(columna), name = "N") %>%
+    mutate(Pct = round(100 * N / sum(N), 1))
+  
   if (!is.null(niveles)) {
-    df <- df %>%
-      mutate(!!sym(columna) := factor(!!sym(columna), levels = niveles, ordered = TRUE))
+    datos <- datos %>%
+      mutate(Cat = factor(Cat, levels = niveles, ordered = TRUE)) %>%
+      arrange(Cat) %>% mutate(Cat = as.character(Cat))
+  } else {
+    datos <- datos %>% arrange(desc(N))
   }
-  resumen <- df %>%
-    count(!!sym(columna), name = "Total") %>%
-    mutate(
-      Porcentaje = round(100 * Total / sum(Total), 1),
-      Hover      = paste0("<b>Total: </b>", Total, "<br><b>%: </b>", Porcentaje, "%"),
-      Color      = if (is.null(filtro_activo)) {
-        "#4A5565"
-      } else {
-        ifelse(!!sym(columna) == filtro_activo, "#C11007", "#4A5565")
-      }
+  filas <- purrr::map(seq_len(nrow(datos)), function(i) {
+    cv  <- datos$Cat[i]; nv  <- datos$N[i]; pv  <- datos$Pct[i]
+    act <- !is.null(filtro_activo) && identical(cv, filtro_activo)
+    bg  <- if (act) "#FEF2F2" else if (i %% 2 == 0) "#F9FAFB" else "white"
+    co  <- if (act) "#C11007" else "#374151"
+    fw  <- if (act) "700" else "400"
+    tags$tr(
+      style   = paste0("background:", bg, "; cursor:pointer; border-bottom:1px solid #F3F4F6;"),
+      onclick = paste0("Shiny.setInputValue('", ns_id, "','",
+                       gsub("'", "\\\\'", cv), "',{priority:'event'});"),
+      tags$td(style = paste0("padding:5px 10px;font-size:12px;color:", co,
+                             ";font-weight:", fw, ";white-space:nowrap;",
+                             "max-width:180px;overflow:hidden;text-overflow:ellipsis;"),
+              if (act) tags$span("\u2022 ", style = "color:#C11007;"), cv),
+      tags$td(style = paste0("padding:5px 8px;font-size:12px;color:", co,
+                             ";font-weight:", fw, ";text-align:right;",
+                             "white-space:nowrap;min-width:40px;"),
+              format(nv, big.mark = ".", decimal.mark = ",", scientific = FALSE)),
+      tags$td(style = paste0("padding:5px 8px;font-size:12px;color:", co,
+                             ";font-weight:", fw, ";text-align:right;white-space:nowrap;"),
+              paste0(pv, "%"))
     )
-  ymax <- max(resumen$Total, na.rm = TRUE) * 1.10
-  plot_ly(
-    data = resumen, x = ~get(columna), y = ~Total, type = "bar",
-    text = ~Total, textposition = "outside", textangle = 0,
-    textfont = list(size = 12), hovertext = ~Hover, hoverinfo = "text",
-    marker = list(color = ~Color), source = source_name
-  ) %>%
-    layout(
-      xaxis = list(title = "", tickangle = 0, tickfont = list(size = 12)),
-      yaxis = list(title = "Cantidad de Clientes", range = c(0, ymax))
-    ) %>%
-    event_register("plotly_click") %>%
-    config(displayModeBar = FALSE)
-}
-
-# Formatea número entero con separador de miles "." y decimal "," (convención Colombia).
-# Necesario porque las funciones cell de reactable se ejecutan fuera del contexto donde
-# options(OutDec = ",") está activo, lo que provoca el warning "big.mark and decimal.mark
-# are both '.'". Especificar decimal.mark explícitamente elimina el conflicto.
-fmt_num <- function(v, prefijo = "") {
-  if (is.na(v) || is.infinite(v)) return("\u2014")
-  paste0(prefijo, format(round(v), big.mark = ".", decimal.mark = ",", scientific = FALSE))
-}
-
-# Genera lista de colDefs compartidas entre todos los módulos de detalle de clientes.
-# data_tabla se recibe como reactivo para que los headers dinámicos de YTD puedan
-# leer LblAcum en tiempo de renderizado sin necesidad de recalcular colDefs.
-dc_coldefs_comunes <- function(data_tabla) {
-  list(
-    # Primeras 3 columnas: identificación (col_header_n = 3L)
-    # CORRECCIÓN Oportunidad: sin html=TRUE — TablaReactable inyecta el HTML del botón
-    # internamente vía cols_activos; nuestro colDef sólo define clase y ancho.
-    Oportunidad = reactable::colDef(name     = "",
-                                    minWidth = 70,
-                                    html     = TRUE,
-                                    sortable = FALSE,
-                                    cell     = function(v) {
-                                      if (is.na(v) || v == "") return("")
-                                      as.character(tags$span(style = paste("display:inline-flex; align-items:center; justify-content:center;",
-                                                                           "width:28px; height:28px; border-radius:6px;",
-                                                                           "background:#C11007; color:white; font-size:13px; cursor:pointer;"
-                                                                           ),
-                                                             icon("hand-holding-dollar")
-                                      ))
-                                      }
-                                    ),
-    # CORRECCIÓN PerRazSoc: html=TRUE necesario para que crear_link_cliente renderice
-    # como enlace HTML y no como texto plano escapado.
-    PerRazSoc = reactable::colDef(
-      name     = "Razón Social",
-      html     = TRUE,
-      minWidth = 200,
-      class    = "rt-col-header"
-    ),
-    CLLinNegNo = reactable::colDef(
-      name     = "Línea de Negocio",
-      minWidth = 120,
-      class    = "rt-col-header"
-    ),
-    
-    # Columnas categóricas y fecha
-    ConPpto  = reactable::colDef(name = "Presupuestado", minWidth = 130),
-    Segmento = reactable::colDef(name = "Segmento",      minWidth = 100),
-    UltFact  = reactable::colDef(
-      name     = "Últ. Factura",
-      minWidth = 110,
-      cell     = function(v) if (is.na(v)) "\u2014" else format(as.Date(v), "%d/%m/%Y")
-    ),
-    
-    # Bloque sacos / margen del mes
-    PptoSacos = reactable::colDef(
-      name = "Ppto Sacos",  minWidth = 110,
-      cell = function(v) fmt_num(v)
-    ),
-    SacosMes = reactable::colDef(
-      name = "Sacos Mes",   minWidth = 110,
-      cell = function(v) fmt_num(v)
-    ),
-    CumpSacosMes = reactable::colDef(
-      name  = "% Cumpl Mes",  minWidth = 110,
-      cell  = function(v) {
-        if (is.na(v) || is.infinite(v)) "\u2014" else paste0(round(v * 100, 1), "%")
-      },
-      style = function(v) {
-        if (is.na(v) || is.infinite(v)) return(NULL)
-        list(
-          background = if (v >= 1) "#D5F5E3" else if (v >= 0.85) "#FCF3CF" else "#FADBD8",
-          fontWeight = "600"
-        )
-      }
-    ),
-    PptoMargen = reactable::colDef(
-      name = "Ppto Margen",  minWidth = 130,
-      cell = function(v) fmt_num(v, "$")
-    ),
-    MargenMes = reactable::colDef(
-      name = "Margen Mes",   minWidth = 130,
-      cell = function(v) fmt_num(v, "$")
-    ),
-    CumpMargenMes = reactable::colDef(
-      name  = "% Cumpl Margen Mes",  minWidth = 150,
-      cell  = function(v) {
-        if (is.na(v) || is.infinite(v)) "\u2014" else paste0(round(v * 100, 1), "%")
-      },
-      style = function(v) {
-        if (is.na(v) || is.infinite(v)) return(NULL)
-        list(
-          background = if (v >= 1) "#D5F5E3" else if (v >= 0.85) "#FCF3CF" else "#FADBD8",
-          fontWeight = "600"
-        )
-      }
-    ),
-    
-    # Bloque acumulado YTD — header dinámico lee LblAcum desde data_tabla()
-    PptoSacosYTD = reactable::colDef(
-      minWidth = 130,
-      header   = function(value, name) {
-        lbl <- tryCatch(unique(data_tabla()$LblAcum)[1], error = function(e) "")
-        paste0("Ppto Sacos Acum. ", lbl)
-      },
-      cell = function(v) fmt_num(v)
-    ),
-    SacosYTD = reactable::colDef(
-      minWidth = 130,
-      header   = function(value, name) {
-        lbl <- tryCatch(unique(data_tabla()$LblAcum)[1], error = function(e) "")
-        paste0("Sacos Acum. ", lbl)
-      },
-      cell = function(v) fmt_num(v)
-    ),
-    CumpSacosYTD = reactable::colDef(
-      minWidth = 150,
-      header   = function(value, name) {
-        lbl <- tryCatch(unique(data_tabla()$LblAcum)[1], error = function(e) "")
-        paste0("% Cumpl Sacos Acum. ", lbl)
-      },
-      cell  = function(v) {
-        if (is.na(v) || is.infinite(v)) "\u2014" else paste0(round(v * 100, 1), "%")
-      },
-      style = function(v) {
-        if (is.na(v) || is.infinite(v)) return(NULL)
-        list(
-          background = if (v >= 1) "#D5F5E3" else if (v >= 0.85) "#FCF3CF" else "#FADBD8",
-          fontWeight = "600"
-        )
-      }
-    ),
-    PptoMargenYTD = reactable::colDef(
-      minWidth = 150,
-      header   = function(value, name) {
-        lbl <- tryCatch(unique(data_tabla()$LblAcum)[1], error = function(e) "")
-        paste0("Ppto Margen Acum. ", lbl)
-      },
-      cell = function(v) fmt_num(v, "$")
-    ),
-    MargenYTD = reactable::colDef(
-      minWidth = 140,
-      header   = function(value, name) {
-        lbl <- tryCatch(unique(data_tabla()$LblAcum)[1], error = function(e) "")
-        paste0("Margen Acum. ", lbl)
-      },
-      cell = function(v) fmt_num(v, "$")
-    ),
-    CumpMargenYTD = reactable::colDef(
-      minWidth = 160,
-      header   = function(value, name) {
-        lbl <- tryCatch(unique(data_tabla()$LblAcum)[1], error = function(e) "")
-        paste0("% Cumpl Margen Acum. ", lbl)
-      },
-      cell  = function(v) {
-        if (is.na(v) || is.infinite(v)) "\u2014" else paste0(round(v * 100, 1), "%")
-      },
-      style = function(v) {
-        if (is.na(v) || is.infinite(v)) return(NULL)
-        list(
-          background = if (v >= 1) "#D5F5E3" else if (v >= 0.85) "#FCF3CF" else "#FADBD8",
-          fontWeight = "600"
-        )
-      }
-    ),
-    
-    # Bloque proyección anual
-    SacosCumpPpto  = reactable::colDef(
-      name = "Sacos proy. cumplir Ppto",  minWidth = 180,
-      cell = function(v) fmt_num(v)
-    ),
-    MargenCumpPpto = reactable::colDef(
-      name = "Margen proy. cumplir Ppto", minWidth = 190,
-      cell = function(v) fmt_num(v, "$")
-    ),
-    
-    # Columna de etiqueta acumulado: oculta, usada solo por los headers dinámicos
-    LblAcum = reactable::colDef(show = FALSE)
+  })
+  
+  tags$div(
+    style = "margin-bottom:4px;",
+    tags$div(style = paste0(
+      "font-size:11px;font-weight:700;color:#374151;text-transform:uppercase;",
+      "letter-spacing:0.05em;margin-bottom:6px;padding-bottom:4px;",
+      "border-bottom:2px solid #E5E7EB;"), titulo),
+    if (!is.null(filtro_activo))
+      tags$div(style = "font-size:10px;color:#C11007;margin-bottom:4px;",
+               paste0("Activo: ", filtro_activo, " \u2014 clic para limpiar")),
+    tags$div(style = "overflow-x:auto;",
+             tags$table(
+               style = "width:100%;border-collapse:collapse;font-family:inherit;",
+               tags$thead(tags$tr(style = "background:#F8FAFC;",
+                                  tags$th(style = "padding:4px 10px;font-size:11px;color:#6B7280;text-align:left;
+                           font-weight:600;white-space:nowrap;", "Categoria"),
+                                  tags$th(style = "padding:4px 8px;font-size:11px;color:#6B7280;text-align:right;
+                           font-weight:600;white-space:nowrap;", "N"),
+                                  tags$th(style = "padding:4px 8px;font-size:11px;color:#6B7280;text-align:right;
+                           font-weight:600;white-space:nowrap;", "%")
+               )),
+               tags$tbody(!!!filas)
+             ))
   )
 }
 
-# UI reutilizable: botón limpiar, tres gráficos plotly, tabla reactable y botón descarga
-dc_ui_base <- function(ns, graficos, titulo_tabla, mostrar_nota = FALSE) {
+# UI base: tres resumenes + dos tablas (sacos / margen) + descarga. Sin boton limpiar.
+dc_ui_base <- function(ns, titulo_tabla) {
   tagList(
-    fluidRow(
-      column(12,
-             BotonGuardar(
-               id              = ns("limpiar_filtros"),
-               label           = "Limpiar Filtros",
-               icon            = "eraser",
-               color           = "warning",
-               size            = "sm",
-               align           = "right",
-               style_container = "display:flex; gap:15px; margin:0 0 10px 0;"
-             )
-      )
-    ),
-    do.call(fluidRow, lapply(graficos, function(g) {
-      column(4,
-             h5(g$titulo),
-             p(g$descripcion, style = "font-size:11px; color:#888; margin:-4px 0 6px 0;"),
-             plotlyOutput(ns(g$output_id), height = "300px")
-      )
-    })),
-    fluidRow(
-      column(12,
-             div(style = "margin-top: 20px;",
-                 TablaReactableUI(
-                   ns("TablaClientes"),
-                   titulo       = titulo_tabla,
-                   footer       = "Clic en el botón Crear para registrar una oportunidad.",
-                   footer_tipo  = "info",
-                   mostrar_nota = mostrar_nota
-                 )
-             )
-      )
-    ),
-    fluidRow(
-      html(paste0(
-        '<div style="text-align: right; width: 100%;">',
-        BotonDescarga("Descargar", size = "md", ns = ns),
-        '</div>'
-      ))
-    )
+    fluidRow(column(4, uiOutput(ns("resumen_1"))),
+             column(4, uiOutput(ns("resumen_2"))),
+             column(4, uiOutput(ns("resumen_3")))),
+    fluidRow(column(12, div(style = "margin-top:20px;",
+                            racafeModulos::TablaReactableUI(
+                              ns("TablaSacos"),
+                              titulo      = paste0(titulo_tabla, " \u2014 Sacos"),
+                              footer      = "Clic en el boton para registrar una oportunidad.",
+                              footer_tipo = "info", mostrar_nota = FALSE)))),
+    fluidRow(column(12, div(style = "margin-top:20px;",
+                            racafeModulos::TablaReactableUI(
+                              ns("TablaMargen"),
+                              titulo      = paste0(titulo_tabla, " \u2014 Margen"),
+                              footer      = "Clic en el boton para registrar una oportunidad.",
+                              footer_tipo = "info", mostrar_nota = FALSE)))),
+    fluidRow(html(paste0(
+      '<div style="text-align:right;width:100%;margin-top:8px;">',
+      BotonDescarga("Descargar", size = "md", ns = ns), '</div>'
+    )))
   )
 }
 
-# Retorna lista para do.call(downloadHandler, ...) con descarga Excel/CSV de datos filtrados
-dc_descarga <- function(data_filtrada_fn, prefijo) {
+# Descarga Excel
+dc_descarga <- function(data_fn, prefijo) {
   list(
     filename = function() paste0(prefijo, "_", Sys.Date(), ".xlsx"),
     content  = function(file) {
-      df <- data_filtrada_fn()
-      if (nrow(df) == 0) {
-        showNotification("No hay datos para descargar", type = "warning")
-        return()
-      }
+      df <- data_fn()
+      if (nrow(df) == 0) { showNotification("Sin datos", type = "warning"); return() }
       tryCatch({
-        if (requireNamespace("openxlsx", quietly = TRUE)) {
-          openxlsx::write.xlsx(df, file)
-        } else {
-          write.csv(df, file, row.names = FALSE)
-        }
-        showNotification("Archivo descargado exitosamente", type = "message")
-      }, error = function(e) {
-        showNotification(paste("Error al descargar:", e$message), type = "error")
-      })
+        if (requireNamespace("openxlsx", quietly = TRUE)) openxlsx::write.xlsx(df, file)
+        else write.csv(df, file, row.names = FALSE)
+        showNotification("Descargado", type = "message")
+      }, error = function(e) showNotification(paste("Error:", e$message), type = "error"))
     }
   )
 }
 
-# Pre-registra source IDs en session$userData$.plotlyShinyEventIDs para evitar warnings.
-# sources: named list(campo = src_id_namespaceado). Observers de click encapsulados en local()
-# para captura correcta de variables en el loop.
-dc_registrar_clicks <- function(session, sources, filtros) {
-  ids_actuales <- session$userData$.plotlyShinyEventIDs
-  session$userData$.plotlyShinyEventIDs <- unique(c(ids_actuales, unname(unlist(sources))))
-  for (campo in names(sources)) {
-    local({
-      cam <- campo
-      src <- sources[[cam]]
-      observeEvent(event_data("plotly_click", source = src), {
-        click <- event_data("plotly_click", source = src)
-        if (!is.null(click))
-          filtros[[cam]] <- if (
-            !is.null(filtros[[cam]]) && filtros[[cam]] == click$x
-          ) NULL else click$x
-      }, ignoreNULL = TRUE)
-    })
-  }
-}
+# ColDefs de identificacion comunes (anchos generosos, sin corte de palabras) ----
+.col_oportunidad <- reactable::colDef(
+  name = "", minWidth = 52, html = TRUE, sortable = FALSE, cell = .btn_oportunidad
+)
+.col_razsoc  <- reactable::colDef(name = "Cliente",         minWidth = 260,
+                                  html = TRUE, sticky = "left")
+.col_linneg  <- reactable::colDef(name = "Linea",           minWidth = 170)
+.col_asesor  <- reactable::colDef(name = "Asesor",          minWidth = 160)
+.col_ppto    <- reactable::colDef(name = "Presupuestado",   minWidth = 150)
+.col_ultfact <- reactable::colDef(
+  name = "Ult. Factura", minWidth = 130,
+  cell = function(v) if (is.na(v)) "\u2014" else format(as.Date(v), "%d/%m/%Y")
+)
+.col_segmento_std <- reactable::colDef(name = "Segmento",   minWidth = 140)
 
-# Config base compartida para llamadas a TablaReactable en todos los módulos de detalle.
-# CORRECCIÓN: col_specs recibe el named list de colDef (antes se pasaba erróneamente a
-# `columnas`, lo que provocaba que TablaReactable construyera nms_visibles como lista de
-# listas y fallara con "invalid subscript type 'list'" al indexar col_specs[[nm_i]]).
-# columnas = NULL indica a TablaReactable que use todas las columnas de data en orden natural.
-dc_tabla_reactable_base <- function(data_tabla, data_filtrada, ns,
-                                    col_specs = NULL, col_header_n = 3L) {
+# ColDefs de sacos ----
+.cols_sacos <- function() list(
+  Oportunidad  = .col_oportunidad,
+  PerRazSoc    = .col_razsoc,
+  CLLinNegNo   = .col_linneg,
+  Segmento     = .col_segmento_std,
+  Asesor       = .col_asesor,
+  Presupuestado = .col_ppto,
+  UltFecFact   = .col_ultfact,
+  PptoSacosMes = reactable::colDef(name = "Ppto Sacos Mes",        minWidth = 170,
+                                   cell = function(v) .fmt_sacos(v)),
+  SacosMes     = reactable::colDef(name = "Sacos Mes",             minWidth = 140,
+                                   cell = function(v) .fmt_sacos(v)),
+  CumpSacosMes = reactable::colDef(name = "% Cumpl Sacos Mes",     minWidth = 180,
+                                   cell  = function(v) .fmt_pct(v),
+                                   style = function(v) .style_cumpl(v)),
+  PptoSacosYTD = reactable::colDef(name = "Ppto Sacos Ano Corrido",minWidth = 200,
+                                   cell = function(v) .fmt_sacos(v)),
+  SacosYTD     = reactable::colDef(name = "Sacos Ano Corrido",     minWidth = 170,
+                                   cell = function(v) .fmt_sacos(v)),
+  CumpSacosYTD = reactable::colDef(name = "% Cumpl Sacos Acum.",   minWidth = 190,
+                                   cell  = function(v) .fmt_pct(v),
+                                   style = function(v) .style_cumpl(v))
+)
+
+# ColDefs de margen ----
+.cols_margen <- function() list(
+  Oportunidad   = .col_oportunidad,
+  PerRazSoc     = .col_razsoc,
+  CLLinNegNo    = .col_linneg,
+  Segmento      = .col_segmento_std,
+  Asesor        = .col_asesor,
+  Presupuestado = .col_ppto,
+  UltFecFact    = .col_ultfact,
+  PptoMargenMes = reactable::colDef(name = "Ppto Margen Mes",        minWidth = 180,
+                                    cell = function(v) .fmt_margen(v)),
+  MargenMes     = reactable::colDef(name = "Margen Mes",             minWidth = 160,
+                                    cell = function(v) .fmt_margen(v)),
+  CumpMargenMes = reactable::colDef(name = "% Cumpl Margen Mes",     minWidth = 190,
+                                    cell  = function(v) .fmt_pct(v),
+                                    style = function(v) .style_cumpl(v)),
+  PptoMargenYTD = reactable::colDef(name = "Ppto Margen Ano Corrido",minWidth = 210,
+                                    cell = function(v) .fmt_margen(v)),
+  MargenYTD     = reactable::colDef(name = "Margen Ano Corrido",     minWidth = 180,
+                                    cell = function(v) .fmt_margen(v)),
+  CumpMargenYTD = reactable::colDef(name = "% Cumpl Margen Acum.",   minWidth = 200,
+                                    cell  = function(v) .fmt_pct(v),
+                                    style = function(v) .style_cumpl(v))
+)
+
+# Helper: registra FormularioOportunidad y las dos TablaReactable con boton oportunidad
+dc_registrar_tablas <- function(ns, data_sacos_r, data_margen_r,
+                                col_ss, col_mg, usr, dat, trigger_update,
+                                tipo_cliente = "CLIENTE") {
+  FormularioOportunidad(
+    "mod_formulario", dat = dat, usr = usr, trigger_update = trigger_update,
+    tipo_cliente_default = reactive(tipo_cliente)
+  )
   racafeModulos::TablaReactable(
-    id             = "TablaClientes",
-    data           = data_tabla,
-    columnas       = NULL,
-    col_specs      = col_specs,
-    modo_seleccion = "celda",
-    id_col         = NULL,
-    cols_activos   = "Oportunidad",
-    col_header_n   = col_header_n,
-    sortable       = TRUE,
-    searchable     = TRUE,
-    page_size      = 15L,
-    compact        = TRUE,
-    mostrar_badge  = FALSE,
-    mostrar_nota   = FALSE,
-    filas_bloqueadas   = "TOTAL",
-    modal_icon         = "file-alt",
-    modal_size         = "xl",
-    modal_titulo_fn    = function(sel) {
-      razsoc <- as.character(sel$fila$PerRazSoc[[1]])
-      paste0("Nueva Oportunidad \u2014 ", razsoc)
+    id = "TablaSacos", data = data_sacos_r,
+    columnas = names(col_ss), col_specs = col_ss,
+    modo_seleccion = "celda", id_col = NULL,
+    cols_activos = "Oportunidad", col_header_n = 2L,
+    sortable = TRUE, searchable = TRUE, page_size = 15L,
+    compact = TRUE, mostrar_badge = FALSE, mostrar_nota = FALSE,
+    filas_bloqueadas = "TOTAL",
+    modal_icon = "hand-holding-dollar", modal_size = "xl",
+    modal_titulo_fn = function(sel) {
+      razsoc_raw <- as.character(sel$fila$PerRazSoc[[1]])
+      # Extraer texto plano si PerRazSoc contiene HTML de enlace
+      razsoc_txt <- gsub("<[^>]+>", "", razsoc_raw)
+      paste0("Nueva Oportunidad \u2014 ", razsoc_txt)
     },
-    modal_pre_fn       = NULL,
-    modal_contenido_fn = function(sel) {
-      FormularioOportunidadUI(ns("mod_formulario"))
-    }
+    modal_contenido_fn = function(sel) FormularioOportunidadUI(ns("mod_formulario"))
+  )
+  racafeModulos::TablaReactable(
+    id = "TablaMargen", data = data_margen_r,
+    columnas = names(col_mg), col_specs = col_mg,
+    modo_seleccion = "celda", id_col = NULL,
+    cols_activos = "Oportunidad", col_header_n = 2L,
+    sortable = TRUE, searchable = TRUE, page_size = 15L,
+    compact = TRUE, mostrar_badge = FALSE, mostrar_nota = FALSE,
+    filas_bloqueadas = "TOTAL",
+    modal_icon = "hand-holding-dollar", modal_size = "xl",
+    modal_titulo_fn = function(sel) {
+      razsoc_raw <- as.character(sel$fila$PerRazSoc[[1]])
+      # Extraer texto plano si PerRazSoc contiene HTML de enlace
+      razsoc_txt <- gsub("<[^>]+>", "", razsoc_raw)
+      paste0("Nueva Oportunidad \u2014 ", razsoc_txt)
+    },
+    modal_contenido_fn = function(sel) FormularioOportunidadUI(ns("mod_formulario"))
   )
 }
 
-# Propaga mensaje validate a todos los outputs cuando el universo de entrada está vacío
-dc_sin_datos_msg <- function() {
-  validate(need(FALSE, paste(
-    "No hay datos disponibles para el universo seleccionado.",
-    "Ajusta los filtros activos e intenta nuevamente."
-  )))
-}
-
-# Clientes ----
-# Módulo: clientes clasificados como CLIENTE en el snapshot del corte del mes.
-# dat() llega pre-filtrado desde ResumenTotal via df_activas; no requiere re-filtro interno.
-# Indicadores: compra mes vigente (gráfico), presupuestado (gráfico), pérdida (gráfico).
-# BucketCumpl (cumplimiento YTD) disponible como columna de tabla para drill-down individual.
-
-DetalleClienteUI <- function(id) {
-  ns <- NS(id)
-  dc_ui_base(
-    ns,
-    titulo_tabla = "Detalle de Clientes Activos",
-    graficos = list(
-      list(
-        output_id   = "FactMesVigente",
-        titulo      = "Compra en el Mes",
-        descripcion = paste(
-          "Clientes activos con y sin facturación registrada en el mes en curso.",
-          "Clic para filtrar la tabla."
-        )
-      ),
-      list(
-        output_id   = "Presupuestado",
-        titulo      = "Presupuestado",
-        descripcion = paste(
-          "Clientes con presupuesto de sacos mayor a cero para el año vigente.",
-          "Clic para filtrar la tabla."
-        )
-      ),
-      list(
-        output_id   = "Tiempo",
-        titulo      = "Riesgo de Pérdida",
-        descripcion = paste(
-          "Clientes agrupados por meses transcurridos desde su última facturación.",
-          "Clic para filtrar la tabla."
-        )
-      )
-    )
+# Helper: fila TOTAL para tabla sacos
+.tot_s <- function(df) {
+  tibble::tibble(
+    Oportunidad = "", PerRazSoc = "TOTAL", CLLinNegNo = "",
+    Segmento = "", Asesor = "", Presupuestado = "", UltFecFact = as.Date(NA),
+    PptoSacosMes = sum(df$PptoSacosMes, na.rm = TRUE),
+    SacosMes     = sum(df$SacosMes,     na.rm = TRUE),
+    CumpSacosMes = SiError_0(sum(df$SacosMes, na.rm=TRUE) / sum(df$PptoSacosMes, na.rm=TRUE)),
+    PptoSacosYTD = sum(df$PptoSacosYTD, na.rm = TRUE),
+    SacosYTD     = sum(df$SacosYTD,     na.rm = TRUE),
+    CumpSacosYTD = SiError_0(sum(df$SacosYTD, na.rm=TRUE) / sum(df$PptoSacosYTD, na.rm=TRUE))
   )
 }
-DetalleCliente <- function(id, dat, usr, trigger_update) {
+
+# Helper: fila TOTAL para tabla margen
+.tot_m <- function(df) {
+  tibble::tibble(
+    Oportunidad = "", PerRazSoc = "TOTAL", CLLinNegNo = "",
+    Segmento = "", Asesor = "", Presupuestado = "", UltFecFact = as.Date(NA),
+    PptoMargenMes = sum(df$PptoMargenMes, na.rm = TRUE),
+    MargenMes     = sum(df$MargenMes,     na.rm = TRUE),
+    CumpMargenMes = SiError_0(sum(df$MargenMes,na.rm=TRUE) / sum(df$PptoMargenMes,na.rm=TRUE)),
+    PptoMargenYTD = sum(df$PptoMargenYTD, na.rm = TRUE),
+    MargenYTD     = sum(df$MargenYTD,     na.rm = TRUE),
+    CumpMargenYTD = SiError_0(sum(df$MargenYTD,na.rm=TRUE) / sum(df$PptoMargenYTD,na.rm=TRUE))
+  )
+}
+
+# Helper: observer de filtro con toggle
+.obs_filtro <- function(input_id, filtros_rv, campo) {
+  observeEvent(input_id, {
+    v <- input_id()
+    filtros_rv[[campo]] <- if (!is.null(filtros_rv[[campo]]) &&
+                               filtros_rv[[campo]] == v) NULL else v
+  }, ignoreNULL = TRUE)
+}
+
+# Clientes Activos ----
+# Objetivo: RETENCION. Fuente: nits con SegmentoRacafe == "CLIENTE" en CRMNALSEGR.
+DetalleClienteUI <- function(id) { ns <- NS(id); dc_ui_base(ns, "Clientes Activos") }
+
+DetalleCliente <- function(id, dat, nits, ctx, usr, trigger_update) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
-    
-    # Source IDs namespaceados para evitar colisiones entre instancias del módulo
-    src_factmes <- ns("factmes")
-    src_conppto <- ns("conppto")
-    src_meses   <- ns("meses")
-    
-    # Estado reactivo de filtros por clic en gráficos
-    filtros <- reactiveValues(factmes = NULL, conppto = NULL, meses = NULL)
-    
-    observeEvent(input$limpiar_filtros, {
-      filtros$factmes <- NULL; filtros$conppto <- NULL; filtros$meses <- NULL
+    local({
+      ids <- c(ns("cr1"), ns("cr2"), ns("cr3"))
+      session$userData$.plotlyShinyEventIDs <- unique(
+        c(session$userData$.plotlyShinyEventIDs, ids))
     })
+    filtros <- reactiveValues(r1 = NULL, r2 = NULL, r3 = NULL)
+    observeEvent(input$cr1,{v<-input$cr1;filtros$r1<-if(!is.null(filtros$r1)&&filtros$r1==v)NULL else v},ignoreNULL=TRUE)
+    observeEvent(input$cr2,{v<-input$cr2;filtros$r2<-if(!is.null(filtros$r2)&&filtros$r2==v)NULL else v},ignoreNULL=TRUE)
+    observeEvent(input$cr3,{v<-input$cr3;filtros$r3<-if(!is.null(filtros$r3)&&filtros$r3==v)NULL else v},ignoreNULL=TRUE)
     
-    # Datos base: flag compra mes vigente, bucket cumplimiento YTD y métricas de presupuesto
-    data_cliente <- reactive({
+    data_base <- reactive({
       waiter_show(html = preloader_calculando$html, color = preloader_calculando$color)
       on.exit(waiter_hide())
-      req(dat())
-      if (nrow(dat()) == 0) dc_sin_datos_msg()
-      tryCatch({
-        eje      <- dc_ejecucion(dat())
-        fec      <- dc_fechas_fact()
-        mes      <- month(Sys.Date())
-        mes_falt <- pmax(12 - mes, 1)
-        # Consolidación con presupuesto normalizado, joins, métricas e indicadores de gestión
-        dat() %>%
-          dc_ppto_normalizar(mes) %>%
-          select(
-            LinNegCod, CLLinNegNo, CliNitPpal, PerRazSoc, Segmento,
-            ConPpto, PptoSacos, PptoMargen, PptoSacosYTD, PptoMargenYTD
-          ) %>%
-          distinct() %>%
-          left_join(fec, by = c("LinNegCod", "CliNitPpal")) %>%
-          left_join(eje, by = c("LinNegCod", "CliNitPpal")) %>%
+      req(nits(), dat())
+      validate(need(nrow(nits()) > 0, "Sin Clientes Activos para los filtros seleccionados."))
+      {
+        message("[DC_ACTIVOS] nits=", nrow(nits()),
+                " dat=", nrow(dat()),
+                " ctx=", nrow(ctx()),
+                " cols_ctx=", paste(names(ctx()), collapse=","))
+        mes <- month(Sys.Date())
+        eje <- dc_ejecucion(dat())
+        ppo <- dc_ppto(ctx())
+        # ctx() viene de dat_t() (sin filtro de fechas) via ResumenTotal.
+        # Garantiza que todos los clientes del segmento tengan PerRazSoc, Segmento,
+        # Asesor y Presupuestado aunque no hayan facturado en el rango seleccionado.
+        # fec: UltFecFact calculada desde dat() (dat_c filtrado) — puede ser NA
+        # para clientes que no facturaron en el periodo; es intencional.
+        fec <- dat() %>%
+          filter(!is.na(FecFact)) %>%
+          group_by(LinNegCod, CliNitPpal) %>%
+          summarise(UltFecFact = max(FecFact, na.rm = TRUE), .groups = "drop")
+        nits() %>%
+          left_join(ctx(), by = c("LinNegCod","CliNitPpal")) %>%
+          left_join(fec, by = c("LinNegCod","CliNitPpal")) %>%
+          left_join(eje, by = c("LinNegCod","CliNitPpal")) %>%
+          left_join(ppo, by = c("LinNegCod","CliNitPpal")) %>%
           mutate(
-            # Flag de compra en el mes: SacosMes llega 0 por left_join si no facturó
-            FactMesVigente = ifelse(
-              !is.na(SacosMes) & SacosMes > 0, "CON COMPRA", "SIN COMPRA"
-            ),
-            Meses = paste(
-              pmax(0, lubridate::interval(UltFact, Sys.Date()) %/% months(1)), "MESES"
-            )
-          ) %>%
-          dc_metricas_cumpl(mes_falt, format(Sys.Date(), "%b %Y")) %>%
-          mutate(
-            # Bucket de cumplimiento YTD: semáforo de gestión por cliente
-            BucketCumpl = dplyr::case_when(
-              is.na(CumpSacosYTD) | CumpSacosYTD == 0 ~ "Sin ejecución",
-              CumpSacosYTD >= 1.00                     ~ ">=100%",
-              CumpSacosYTD >= 0.80                     ~ "80-99%",
-              CumpSacosYTD >= 0.50                     ~ "50-79%",
-              TRUE                                     ~ "<50%"
-            )
+            across(c(SacosMes,MargenMes,SacosYTD,MargenYTD,
+                     PptoSacosMes,PptoMargenMes,PptoSacosYTD,PptoMargenYTD),
+                   ~ coalesce(.x, 0)),
+            CumpSacosMes  = SiError_0(SacosMes  / PptoSacosMes),
+            CumpMargenMes = SiError_0(MargenMes / PptoMargenMes),
+            CumpSacosYTD  = SiError_0(SacosYTD  / PptoSacosYTD),
+            CumpMargenYTD = SiError_0(MargenYTD / PptoMargenYTD),
+            FactMesVigente = ifelse(SacosMes > 0, "CON COMPRA", "SIN COMPRA"),
+            MesesSinCompra = {
+              m <- ifelse(is.na(UltFecFact), NA_real_,
+                          pmax(0, as.numeric(difftime(Sys.Date(), UltFecFact, units="days")) %/% 30))
+              dplyr::case_when(is.na(m)~"Sin historial",m==0~"0 meses",
+                               m<=2~"1-2 meses",m<=4~"3-4 meses",TRUE~"5+ meses")
+            },
+            CLLinNegNo = ifelse(LinNegCod == 10000L, "CONVENCIONALES", "A LA MEDIDA"),
+            Oportunidad = "Crear"
           )
-      }, error = function(e) {
-        showNotification(paste("Error procesando datos:", e$message), type = "error")
-        data.frame()
-      })
+      }
     })
     
-    # Datos filtrados según selección activa en gráficos
     data_filtrada <- reactive({
-      df <- data_cliente()
-      if (nrow(df) == 0) return(df)
-      if (!is.null(filtros$factmes)) df <- df %>% filter(FactMesVigente == filtros$factmes)
-      if (!is.null(filtros$conppto)) df <- df %>% filter(ConPpto == filtros$conppto)
-      if (!is.null(filtros$meses))   df <- df %>% filter(Meses == filtros$meses)
+      df <- data_base(); if(nrow(df)==0) return(df)
+      if(!is.null(filtros$r1)) df <- df %>% filter(FactMesVigente == filtros$r1)
+      if(!is.null(filtros$r2)) df <- df %>% filter(Presupuestado  == filtros$r2)
+      if(!is.null(filtros$r3)) df <- df %>% filter(MesesSinCompra == filtros$r3)
       df
     })
     
-    # Datos para tabla con fila de totales; columnas indicador inicializadas en blanco
-    data_tabla <- reactive({
-      df <- data_filtrada()
-      req(nrow(df) > 0)
-      fila_total <- dc_fila_total(df) %>%
-        mutate(FactMesVigente = "", BucketCumpl = "")
-      df %>%
-        crear_link_cliente(col_razsoc = "PerRazSoc", col_linneg = "CLLinNegNo") %>%
-        select(
-          Oportunidad, PerRazSoc, CLLinNegNo,
-          FactMesVigente, BucketCumpl, ConPpto, Segmento, UltFact,
-          PptoSacos, SacosMes, CumpSacosMes,
-          PptoMargen, MargenMes, CumpMargenMes,
-          PptoSacosYTD, SacosYTD, CumpSacosYTD,
-          PptoMargenYTD, MargenYTD, CumpMargenYTD,
-          SacosCumpPpto, MargenCumpPpto, LblAcum
-        ) %>%
-        bind_rows(fila_total)
+    output$resumen_1 <- renderUI(dc_tabla_resumen(data_base(),"FactMesVigente","Compra en el Mes",filtros$r1,ns_id=ns("cr1")))
+    output$resumen_2 <- renderUI(dc_tabla_resumen(data_base(),"Presupuestado","Presupuestado",filtros$r2,ns_id=ns("cr2")))
+    output$resumen_3 <- renderUI({
+      lvl <- c("Sin historial","0 meses","1-2 meses","3-4 meses","5+ meses")
+      dc_tabla_resumen(data_base(),"MesesSinCompra","Riesgo de Perdida",filtros$r3,niveles=lvl,ns_id=ns("cr3"))
     })
     
-    # Patrón eager: FormularioOportunidad registrado en startup antes de TablaReactable
-    FormularioOportunidad("mod_formulario",
-                          dat                  = dat,
-                          usr                  = usr,
-                          trigger_update       = trigger_update,
-                          tipo_cliente_default = reactive("CLIENTE")
-    )
+    .col_fmv <- reactable::colDef(name="Compra Mes",minWidth=150,
+                                  style=function(v) list(background=switch(v,"CON COMPRA"="#EDFBF2","SIN COMPRA"="#FEF2F2","white"),
+                                                         color=switch(v,"CON COMPRA"="#1E8449","SIN COMPRA"="#943126","#333"),fontWeight="600"))
+    .col_msc <- reactable::colDef(name="Meses sin Compra",minWidth=170,
+                                  style=function(v) list(
+                                    background=switch(v,"Sin historial"="#F3F4F6","0 meses"="#EDFBF2","1-2 meses"="#FFFBEB","3-4 meses"="#FFF7ED","5+ meses"="#FEF2F2","white"),
+                                    color=switch(v,"Sin historial"="#6B7280","0 meses"="#1E8449","1-2 meses"="#92400E","3-4 meses"="#9A3412","5+ meses"="#7F1D1D","#333"),
+                                    fontWeight="600"))
     
-    # Renderizado de gráficos con source IDs namespaceados
-    output$FactMesVigente <- renderPlotly(
-      dc_grafico(data_filtrada(), "FactMesVigente", src_factmes, filtros$factmes)
-    )
-    output$Presupuestado <- renderPlotly(
-      dc_grafico(data_filtrada(), "ConPpto", src_conppto, filtros$conppto)
-    )
-    output$Tiempo <- renderPlotly(
-      dc_grafico(data_filtrada(), "Meses", src_meses, filtros$meses)
-    )
+    col_ss <- modifyList(.cols_sacos(), list(FactMesVigente=.col_fmv, MesesSinCompra=.col_msc))
+    col_mg <- modifyList(.cols_margen(), list(FactMesVigente=.col_fmv, MesesSinCompra=.col_msc))
     
-    # Registro diferido de observers de clic para eliminar warnings de plotly
-    dc_registrar_clicks(session,
-                        sources = list(factmes = src_factmes, conppto = src_conppto, meses = src_meses),
-                        filtros = filtros
-    )
+    .sel_s <- function(df) df %>%
+      crear_link_cliente(col_razsoc="PerRazSoc",col_linneg="CLLinNegNo") %>%
+      select(Oportunidad,PerRazSoc,CLLinNegNo,FactMesVigente,MesesSinCompra,
+             Segmento,Asesor,Presupuestado,UltFecFact,
+             PptoSacosMes,SacosMes,CumpSacosMes,PptoSacosYTD,SacosYTD,CumpSacosYTD)
+    .sel_m <- function(df) df %>%
+      crear_link_cliente(col_razsoc="PerRazSoc",col_linneg="CLLinNegNo") %>%
+      select(Oportunidad,PerRazSoc,CLLinNegNo,FactMesVigente,MesesSinCompra,
+             Segmento,Asesor,Presupuestado,UltFecFact,
+             PptoMargenMes,MargenMes,CumpMargenMes,PptoMargenYTD,MargenYTD,CumpMargenYTD)
     
-    # Tabla reactable con colDefs específicos para indicadores de clientes activos.
-    # CORRECCIÓN: col_specs recibe el named list de colDef (antes: argumento columnas).
-    dc_tabla_reactable_base(data_tabla, data_filtrada, ns,
-                            col_specs = modifyList(dc_coldefs_comunes(data_tabla), list(
-                              FactMesVigente = reactable::colDef(
-                                name  = "Compra Mes", minWidth = 120,
-                                style = function(v) {
-                                  list(
-                                    background = switch(v, "CON COMPRA" = "#EDFBF2", "SIN COMPRA" = "#FEF2F2", "white"),
-                                    color      = switch(v, "CON COMPRA" = "#1E8449", "SIN COMPRA" = "#943126", "#333"),
-                                    fontWeight = "600"
-                                  )
-                                }
-                              ),
-                              BucketCumpl = reactable::colDef(
-                                name  = "Cumpl. YTD", minWidth = 120,
-                                style = function(v) {
-                                  list(
-                                    background = switch(v,
-                                                        ">=100%"         = "#D5F5E3",
-                                                        "80-99%"         = "#FCF3CF",
-                                                        "50-79%"         = "#FDEBD0",
-                                                        "<50%"           = "#FADBD8",
-                                                        "Sin ejecución"  = "#F8F9F9",
-                                                        "white"
-                                    ),
-                                    color = switch(v,
-                                                   ">=100%"         = "#1A5226",
-                                                   "80-99%"         = "#7D6608",
-                                                   "50-79%"         = "#784212",
-                                                   "<50%"           = "#922B21",
-                                                   "Sin ejecución"  = "#707B7C",
-                                                   "#333"
-                                    ),
-                                    fontWeight = "600"
-                                  )
-                                }
-                              )
-                            ))
-    )
+    .tot_s_act <- function(df) .tot_s(df) %>%
+      mutate(FactMesVigente="",MesesSinCompra="")
+    .tot_m_act <- function(df) .tot_m(df) %>%
+      mutate(FactMesVigente="",MesesSinCompra="")
     
-    # Descarga Excel de datos filtrados sin fila de totales
-    output$Descargar <- do.call(downloadHandler, dc_descarga(data_filtrada, "clientes_activos"))
+    data_sacos_r  <- reactive({ df<-data_filtrada();req(nrow(df)>0); bind_rows(.sel_s(df),.tot_s_act(df)) })
+    data_margen_r <- reactive({ df<-data_filtrada();req(nrow(df)>0); bind_rows(.sel_m(df),.tot_m_act(df)) })
+    
+    dc_registrar_tablas(ns, data_sacos_r, data_margen_r, col_ss, col_mg,
+                        usr, dat, trigger_update, tipo_cliente = "CLIENTE")
+    output$Descargar <- do.call(downloadHandler, dc_descarga(data_filtrada,"activos"))
   })
 }
 
 # Clientes a Recuperar ----
-# Módulo: clientes clasificados como CLIENTE A RECUPERAR en el snapshot del corte del mes.
-# dat() llega pre-filtrado desde ResumenTotal via df_recuperar.
-# Indicadores: distribución por segmento, presupuesto, urgencia por meses sin facturar
-# y valor en riesgo como columna de acción en tabla.
+# Objetivo: RECUPERACION. Fuente: nits con SegmentoRacafe == "CLIENTE A RECUPERAR".
+DetalleClienteRecuperarUI <- function(id) { ns<-NS(id); dc_ui_base(ns,"Clientes a Recuperar") }
 
-DetalleClienteRecuperarUI <- function(id) {
-  ns <- NS(id)
-  dc_ui_base(
-    ns,
-    titulo_tabla = "Detalle de Clientes a Recuperar",
-    graficos = list(
-      list(
-        output_id   = "Segmento",
-        titulo      = "Segmento",
-        descripcion = paste(
-          "Distribución de clientes a recuperar por segmento de negocio.",
-          "Clic para filtrar la tabla."
-        )
-      ),
-      list(
-        output_id   = "Presupuestado",
-        titulo      = "Presupuestado",
-        descripcion = paste(
-          "Clientes con presupuesto de sacos mayor a cero para el año vigente.",
-          "Clic para filtrar la tabla."
-        )
-      ),
-      list(
-        output_id   = "Tiempo",
-        titulo      = "Meses sin Facturar",
-        descripcion = paste(
-          "Clientes agrupados por meses transcurridos desde su última facturación.",
-          "Clic para filtrar la tabla."
-        )
-      )
-    )
-  )
-}
-
-DetalleClienteRecuperar <- function(id, dat, usr, trigger_update) {
+DetalleClienteRecuperar <- function(id, dat, nits, ctx, usr, trigger_update) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
-    
-    # Source IDs namespaceados para evitar colisiones entre instancias del módulo
-    src_segmento <- ns("segmento")
-    src_conppto  <- ns("conppto")
-    src_meses    <- ns("meses")
-    
-    # Estado reactivo de filtros por clic en gráficos
-    filtros <- reactiveValues(segmento = NULL, conppto = NULL, meses = NULL)
-    
-    observeEvent(input$limpiar_filtros, {
-      filtros$segmento <- NULL; filtros$conppto <- NULL; filtros$meses <- NULL
+    local({
+      ids <- c(ns("cr1"),ns("cr2"),ns("cr3"))
+      session$userData$.plotlyShinyEventIDs <- unique(c(session$userData$.plotlyShinyEventIDs,ids))
     })
+    filtros <- reactiveValues(r1=NULL,r2=NULL,r3=NULL)
+    observeEvent(input$cr1,{v<-input$cr1;filtros$r1<-if(!is.null(filtros$r1)&&filtros$r1==v)NULL else v},ignoreNULL=TRUE)
+    observeEvent(input$cr2,{v<-input$cr2;filtros$r2<-if(!is.null(filtros$r2)&&filtros$r2==v)NULL else v},ignoreNULL=TRUE)
+    observeEvent(input$cr3,{v<-input$cr3;filtros$r3<-if(!is.null(filtros$r3)&&filtros$r3==v)NULL else v},ignoreNULL=TRUE)
     
-    # Datos base: urgencia por meses sin facturar, valor en riesgo y métricas de presupuesto
-    data_cliente <- reactive({
-      waiter_show(html = preloader_calculando$html, color = preloader_calculando$color)
+    data_base <- reactive({
+      waiter_show(html=preloader_calculando$html,color=preloader_calculando$color)
       on.exit(waiter_hide())
-      req(dat())
-      if (nrow(dat()) == 0) dc_sin_datos_msg()
-      tryCatch({
-        eje      <- dc_ejecucion(dat())
-        fec      <- dc_fechas_fact()
-        mes      <- month(Sys.Date())
-        mes_falt <- pmax(12 - mes, 1)
-        # Consolidación con presupuesto normalizado, joins y cálculo de indicadores
-        dat() %>%
-          dc_ppto_normalizar(mes) %>%
-          select(
-            LinNegCod, CLLinNegNo, CliNitPpal, PerRazSoc, Segmento,
-            ConPpto, PptoSacos, PptoMargen, PptoSacosYTD, PptoMargenYTD
-          ) %>%
-          distinct() %>%
-          left_join(fec, by = c("LinNegCod", "CliNitPpal")) %>%
-          left_join(eje, by = c("LinNegCod", "CliNitPpal")) %>%
+      req(nits(),dat())
+      validate(need(nrow(nits())>0,"Sin Clientes a Recuperar para los filtros seleccionados."))
+      {
+        eje <- dc_ejecucion(dat()); ppo <- dc_ppto(ctx())
+        # ctx() desde dat_t() via ResumenTotal — sin filtro de fechas
+        # fec: UltFecFact desde dat() (con filtro de fechas), puede ser NA para inactivos
+        fec <- dat() %>%
+          filter(!is.na(FecFact)) %>%
+          group_by(LinNegCod, CliNitPpal) %>%
+          summarise(UltFecFact = max(FecFact, na.rm = TRUE), .groups = "drop")
+        nits() %>%
+          left_join(ctx(), by = c("LinNegCod","CliNitPpal")) %>%
+          left_join(fec,by=c("LinNegCod","CliNitPpal")) %>%
+          left_join(eje,by=c("LinNegCod","CliNitPpal")) %>%
+          left_join(ppo,by=c("LinNegCod","CliNitPpal")) %>%
           mutate(
-            # Bucket de meses ordenado para urgencia de recuperación
-            Meses = {
-              m <- pmax(0, lubridate::interval(UltFact, Sys.Date()) %/% months(1))
-              dplyr::case_when(
-                m <= 3 ~ "Hasta 3 meses",
-                m <= 6 ~ "De 4 a 6 meses",
-                TRUE   ~ "Más de 6 meses"
-              )
-            }
-          ) %>%
-          dc_metricas_cumpl(mes_falt, format(Sys.Date(), "%b %Y")) %>%
-          mutate(
-            # Valor en riesgo: margen YTD histórico como proxy del impacto de no recuperar
+            across(c(SacosMes,MargenMes,SacosYTD,MargenYTD,
+                     PptoSacosMes,PptoMargenMes,PptoSacosYTD,PptoMargenYTD),~coalesce(.x,0)),
+            CumpSacosMes  = SiError_0(SacosMes  / PptoSacosMes),
+            CumpMargenMes = SiError_0(MargenMes / PptoMargenMes),
+            CumpSacosYTD  = SiError_0(SacosYTD  / PptoSacosYTD),
+            CumpMargenYTD = SiError_0(MargenYTD / PptoMargenYTD),
+            MesesSinFacturar = {
+              m <- ifelse(is.na(UltFecFact), NA_real_,
+                          pmax(0, as.numeric(difftime(Sys.Date(), UltFecFact, units="days")) %/% 30))
+              dplyr::case_when(is.na(m)~"Sin historial",m<=3~"Hasta 3 meses",
+                               m<=6~"De 4 a 6 meses",TRUE~"Mas de 6 meses")
+            },
             ValorEnRiesgo = dplyr::case_when(
-              is.na(MargenYTD) | MargenYTD == 0 ~ "Sin ejecución",
-              MargenYTD > 5e6                   ~ "Alto (>5M)",
-              MargenYTD > 1e6                   ~ "Medio (1-5M)",
-              TRUE                              ~ "Bajo (<1M)"
-            )
+              is.na(MargenYTD)|MargenYTD==0~"Sin ejecucion",
+              MargenYTD>5e6~"Alto (>5M)",MargenYTD>1e6~"Medio (1-5M)",TRUE~"Bajo (<1M)"),
+            CLLinNegNo = ifelse(LinNegCod==10000L,"CONVENCIONALES","A LA MEDIDA"),
+            Oportunidad = "Crear"
           )
-      }, error = function(e) {
-        showNotification(paste("Error procesando datos:", e$message), type = "error")
-        data.frame()
-      })
+      }
     })
     
-    # Datos filtrados según selección activa en gráficos
     data_filtrada <- reactive({
-      df <- data_cliente()
-      if (nrow(df) == 0) return(df)
-      if (!is.null(filtros$segmento)) df <- df %>% filter(Segmento == filtros$segmento)
-      if (!is.null(filtros$conppto))  df <- df %>% filter(ConPpto == filtros$conppto)
-      if (!is.null(filtros$meses))    df <- df %>% filter(Meses == filtros$meses)
+      df<-data_base();if(nrow(df)==0) return(df)
+      if(!is.null(filtros$r1)) df<-df %>% filter(Segmento==filtros$r1)
+      if(!is.null(filtros$r2)) df<-df %>% filter(Presupuestado==filtros$r2)
+      if(!is.null(filtros$r3)) df<-df %>% filter(MesesSinFacturar==filtros$r3)
       df
     })
     
-    # Datos para tabla con fila de totales; ValorEnRiesgo inicializado en blanco en total
-    data_tabla <- reactive({
-      df <- data_filtrada()
-      req(nrow(df) > 0)
-      fila_total <- dc_fila_total(df) %>% mutate(ValorEnRiesgo = "")
-      df %>%
-        crear_link_cliente(col_razsoc = "PerRazSoc", col_linneg = "CLLinNegNo") %>%
-        select(
-          Oportunidad, PerRazSoc, CLLinNegNo,
-          ValorEnRiesgo, ConPpto, Segmento, UltFact,
-          PptoSacos, SacosMes, CumpSacosMes,
-          PptoMargen, MargenMes, CumpMargenMes,
-          PptoSacosYTD, SacosYTD, CumpSacosYTD,
-          PptoMargenYTD, MargenYTD, CumpMargenYTD,
-          SacosCumpPpto, MargenCumpPpto, LblAcum
-        ) %>%
-        bind_rows(fila_total)
+    output$resumen_1 <- renderUI(dc_tabla_resumen(data_base(),"Segmento","Segmento",filtros$r1,ns_id=ns("cr1")))
+    output$resumen_2 <- renderUI(dc_tabla_resumen(data_base(),"Presupuestado","Presupuestado",filtros$r2,ns_id=ns("cr2")))
+    output$resumen_3 <- renderUI({
+      lvl <- c("Sin historial","Hasta 3 meses","De 4 a 6 meses","Mas de 6 meses")
+      dc_tabla_resumen(data_base(),"MesesSinFacturar","Urgencia de Recuperacion",filtros$r3,niveles=lvl,ns_id=ns("cr3"))
     })
     
-    # Patrón eager: FormularioOportunidad registrado en startup antes de TablaReactable
-    FormularioOportunidad("mod_formulario",
-                          dat                  = dat,
-                          usr                  = usr,
-                          trigger_update       = trigger_update,
-                          tipo_cliente_default = reactive("CLIENTE A RECUPERAR")
-    )
+    .col_seg_rec <- reactable::colDef(name="Segmento",minWidth=140,
+                                      style=function(v) list(background="#FDEDEC",color="#943126",fontWeight="600"))
+    .col_urg <- reactable::colDef(name="Urgencia",minWidth=170,
+                                  style=function(v) list(
+                                    background=switch(v,"Sin historial"="#F3F4F6","Hasta 3 meses"="#FFFBEB","De 4 a 6 meses"="#FFF7ED","Mas de 6 meses"="#FEF2F2","white"),
+                                    color=switch(v,"Sin historial"="#6B7280","Hasta 3 meses"="#92400E","De 4 a 6 meses"="#9A3412","Mas de 6 meses"="#7F1D1D","#333"),
+                                    fontWeight="600"))
+    .col_riesgo <- reactable::colDef(name="Valor en Riesgo",minWidth=170,
+                                     style=function(v) list(
+                                       background=switch(v,"Alto (>5M)"="#FADBD8","Medio (1-5M)"="#FDEBD0","Bajo (<1M)"="#FCF3CF","Sin ejecucion"="#F8F9F9","white"),
+                                       color=switch(v,"Alto (>5M)"="#922B21","Medio (1-5M)"="#784212","Bajo (<1M)"="#7D6608","Sin ejecucion"="#707B7C","#333"),
+                                       fontWeight="600"))
     
-    # Niveles ordenados de urgencia para el gráfico de meses sin facturar
-    lvl_meses <- c("Hasta 3 meses", "De 4 a 6 meses", "Más de 6 meses")
+    col_ss <- modifyList(.cols_sacos(),  list(Segmento=.col_seg_rec,MesesSinFacturar=.col_urg,ValorEnRiesgo=.col_riesgo))
+    col_mg <- modifyList(.cols_margen(), list(Segmento=.col_seg_rec,MesesSinFacturar=.col_urg,ValorEnRiesgo=.col_riesgo))
     
-    # Renderizado de gráficos con source IDs namespaceados
-    output$Segmento <- renderPlotly(
-      dc_grafico(data_filtrada(), "Segmento", src_segmento, filtros$segmento)
-    )
-    output$Presupuestado <- renderPlotly(
-      dc_grafico(data_filtrada(), "ConPpto", src_conppto, filtros$conppto)
-    )
-    output$Tiempo <- renderPlotly(
-      dc_grafico(data_filtrada(), "Meses", src_meses, filtros$meses, niveles = lvl_meses)
-    )
+    .sel_s_rec <- function(df) df %>%
+      crear_link_cliente(col_razsoc="PerRazSoc",col_linneg="CLLinNegNo") %>%
+      select(Oportunidad,PerRazSoc,CLLinNegNo,MesesSinFacturar,ValorEnRiesgo,
+             Segmento,Asesor,Presupuestado,UltFecFact,
+             PptoSacosMes,SacosMes,CumpSacosMes,PptoSacosYTD,SacosYTD,CumpSacosYTD)
+    .sel_m_rec <- function(df) df %>%
+      crear_link_cliente(col_razsoc="PerRazSoc",col_linneg="CLLinNegNo") %>%
+      select(Oportunidad,PerRazSoc,CLLinNegNo,MesesSinFacturar,ValorEnRiesgo,
+             Segmento,Asesor,Presupuestado,UltFecFact,
+             PptoMargenMes,MargenMes,CumpMargenMes,PptoMargenYTD,MargenYTD,CumpMargenYTD)
+    .tot_s_rec <- function(df) .tot_s(df) %>% mutate(MesesSinFacturar="",ValorEnRiesgo="")
+    .tot_m_rec <- function(df) .tot_m(df) %>% mutate(MesesSinFacturar="",ValorEnRiesgo="")
     
-    # Registro diferido de observers de clic para eliminar warnings de plotly
-    dc_registrar_clicks(session,
-                        sources = list(segmento = src_segmento, conppto = src_conppto, meses = src_meses),
-                        filtros = filtros
-    )
+    data_sacos_r  <- reactive({ df<-data_filtrada();req(nrow(df)>0); bind_rows(.sel_s_rec(df),.tot_s_rec(df)) })
+    data_margen_r <- reactive({ df<-data_filtrada();req(nrow(df)>0); bind_rows(.sel_m_rec(df),.tot_m_rec(df)) })
     
-    # Tabla reactable con colDefs específicos para clientes a recuperar.
-    # CORRECCIÓN: col_specs recibe el named list de colDef (antes: argumento columnas).
-    dc_tabla_reactable_base(data_tabla, data_filtrada, ns,
-                            col_specs = modifyList(dc_coldefs_comunes(data_tabla), list(
-                              Segmento = reactable::colDef(
-                                name  = "Segmento", minWidth = 110,
-                                style = function(v) list(
-                                  background = "#FDEDEC", color = "#943126", fontWeight = "600"
-                                )
-                              ),
-                              ValorEnRiesgo = reactable::colDef(
-                                name  = "Valor en Riesgo", minWidth = 140,
-                                style = function(v) {
-                                  list(
-                                    background = switch(v,
-                                                        "Alto (>5M)"   = "#FADBD8",
-                                                        "Medio (1-5M)" = "#FDEBD0",
-                                                        "Bajo (<1M)"   = "#FCF3CF",
-                                                        "Sin ejecución" = "#F8F9F9",
-                                                        "white"
-                                    ),
-                                    color = switch(v,
-                                                   "Alto (>5M)"   = "#922B21",
-                                                   "Medio (1-5M)" = "#784212",
-                                                   "Bajo (<1M)"   = "#7D6608",
-                                                   "Sin ejecución" = "#707B7C",
-                                                   "#333"
-                                    ),
-                                    fontWeight = "600"
-                                  )
-                                }
-                              )
-                            ))
-    )
-    
-    # Descarga Excel de datos filtrados sin fila de totales
-    output$Descargar <- do.call(
-      downloadHandler, dc_descarga(data_filtrada, "clientes_recuperar")
-    )
+    dc_registrar_tablas(ns,data_sacos_r,data_margen_r,col_ss,col_mg,
+                        usr,dat,trigger_update,tipo_cliente="CLIENTE A RECUPERAR")
+    output$Descargar <- do.call(downloadHandler,dc_descarga(data_filtrada,"recuperar"))
   })
 }
 
 # Clientes Nuevos ----
-# Módulo: clientes con primera factura en el mes vigente sin historial previo en CRMNALSEGR
-# ni en FACT. dat() llega pre-filtrado desde ResumenTotal via df_nuevas.
-# Presupuesto excluido: clientes nuevos no tienen asignación presupuestal en el año vigente.
-# Indicadores: segmento, línea de negocio, tamaño de primera compra (bucket sacos).
-# PrimFact incluida en tabla como referencia de fecha de adquisición.
+# Objetivo: CONVERSION. Fuente: CLIENTE en CRMNALSEGR mes actual, ausente en mes anterior.
+# Sin presupuesto: columnas Ppto ocultas.
+DetalleClienteNuevoUI <- function(id) { ns<-NS(id); dc_ui_base(ns,"Clientes Nuevos del Mes") }
 
-DetalleClienteNuevoUI <- function(id) {
-  ns <- NS(id)
-  dc_ui_base(
-    ns,
-    titulo_tabla = "Detalle de Clientes Nuevos",
-    graficos = list(
-      list(
-        output_id   = "Segmento",
-        titulo      = "Segmento",
-        descripcion = paste(
-          "Distribución de clientes nuevos del mes por segmento de negocio.",
-          "Clic para filtrar la tabla."
-        )
-      ),
-      list(
-        output_id   = "LinNeg",
-        titulo      = "Línea de Negocio",
-        descripcion = paste(
-          "Líneas de negocio que generaron nuevos clientes en el mes.",
-          "Clic para filtrar la tabla."
-        )
-      ),
-      list(
-        output_id   = "BucketSacos",
-        titulo      = "Tamaño de Primera Compra",
-        descripcion = paste(
-          "Clientes nuevos agrupados por volumen de sacos en su primera factura del mes.",
-          "Clic para filtrar la tabla."
-        )
-      )
-    )
-  )
-}
-
-DetalleClienteNuevo <- function(id, dat, usr, trigger_update) {
+DetalleClienteNuevo <- function(id, dat, nits, ctx, usr, trigger_update) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
-    
-    # Source IDs namespaceados para evitar colisiones entre instancias del módulo
-    src_segmento    <- ns("segmento")
-    src_linneg      <- ns("linneg")
-    src_bucketsacos <- ns("bucketsacos")
-    
-    # Estado reactivo de filtros por clic en gráficos
-    filtros <- reactiveValues(segmento = NULL, linneg = NULL, bucketsacos = NULL)
-    
-    observeEvent(input$limpiar_filtros, {
-      filtros$segmento <- NULL; filtros$linneg <- NULL; filtros$bucketsacos <- NULL
+    local({
+      ids <- c(ns("cr1"),ns("cr2"),ns("cr3"))
+      session$userData$.plotlyShinyEventIDs <- unique(c(session$userData$.plotlyShinyEventIDs,ids))
     })
+    filtros <- reactiveValues(r1=NULL,r2=NULL,r3=NULL)
+    observeEvent(input$cr1,{v<-input$cr1;filtros$r1<-if(!is.null(filtros$r1)&&filtros$r1==v)NULL else v},ignoreNULL=TRUE)
+    observeEvent(input$cr2,{v<-input$cr2;filtros$r2<-if(!is.null(filtros$r2)&&filtros$r2==v)NULL else v},ignoreNULL=TRUE)
+    observeEvent(input$cr3,{v<-input$cr3;filtros$r3<-if(!is.null(filtros$r3)&&filtros$r3==v)NULL else v},ignoreNULL=TRUE)
     
-    # Datos base: tamaño de primera compra, línea de negocio y primera fecha de adquisición.
-    # ConPpto excluido: clientes nuevos no tienen presupuesto asignado en el año vigente.
-    data_cliente <- reactive({
-      waiter_show(html = preloader_calculando$html, color = preloader_calculando$color)
+    data_base <- reactive({
+      waiter_show(html=preloader_calculando$html,color=preloader_calculando$color)
       on.exit(waiter_hide())
-      req(dat())
-      if (nrow(dat()) == 0) dc_sin_datos_msg()
-      tryCatch({
-        eje      <- dc_ejecucion(dat())
-        fec      <- dc_fechas_fact()
-        mes      <- month(Sys.Date())
-        mes_falt <- pmax(12 - mes, 1)
-        # Consolidación: dat() ya contiene solo nuevos — no requiere filtro ni semi_join
-        dat() %>%
-          dc_ppto_normalizar(mes) %>%
-          select(
-            LinNegCod, CLLinNegNo, CliNitPpal, PerRazSoc, Segmento,
-            PptoSacos, PptoMargen, PptoSacosYTD, PptoMargenYTD
-          ) %>%
-          distinct() %>%
-          left_join(fec, by = c("LinNegCod", "CliNitPpal")) %>%
-          left_join(eje, by = c("LinNegCod", "CliNitPpal")) %>%
-          mutate(SacosMes = ifelse(is.na(SacosMes), 0, SacosMes)) %>%
-          dc_metricas_cumpl(mes_falt, format(Sys.Date(), "%b %Y")) %>%
+      req(nits(),dat())
+      validate(need(nrow(nits())>0,"Sin Clientes Nuevos para los filtros seleccionados."))
+      {
+        eje <- dc_ejecucion(dat())
+        # ctx() desde dat_t() via ResumenTotal — sin filtro de fechas
+        # fec: UltFecFact desde dat() (con filtro de fechas), puede ser NA para inactivos
+        fec <- dat() %>%
+          filter(!is.na(FecFact)) %>%
+          group_by(LinNegCod, CliNitPpal) %>%
+          summarise(UltFecFact = max(FecFact, na.rm = TRUE), .groups = "drop")
+        nits() %>%
+          left_join(ctx(), by = c("LinNegCod","CliNitPpal")) %>%
+          left_join(eje,by=c("LinNegCod","CliNitPpal")) %>%
+          left_join(fec,by=c("LinNegCod","CliNitPpal")) %>%
           mutate(
-            # Bucket de tamaño de primera compra: indica potencial del cliente nuevo
-            BucketSacos = dplyr::case_when(
-              SacosMes >= 100 ~ ">=100 sacos",
-              SacosMes >= 50  ~ "50-99 sacos",
-              SacosMes >= 10  ~ "10-49 sacos",
-              SacosMes > 0    ~ "<10 sacos",
-              TRUE            ~ "Sin compra"
-            )
+            across(c(SacosMes,MargenMes,SacosYTD,MargenYTD),~coalesce(.x,0)),
+            PptoSacosMes=0,PptoMargenMes=0,PptoSacosYTD=0,PptoMargenYTD=0,
+            CumpSacosMes=NA_real_,CumpMargenMes=NA_real_,
+            CumpSacosYTD=NA_real_,CumpMargenYTD=NA_real_,
+            BucketSacos=dplyr::case_when(
+              SacosMes>=100~">=100 sacos",SacosMes>=50~"50-99 sacos",
+              SacosMes>=10~"10-49 sacos",SacosMes>0~"<10 sacos",TRUE~"Sin compra"),
+            CLLinNegNo=ifelse(LinNegCod==10000L,"CONVENCIONALES","A LA MEDIDA"),
+            Oportunidad="Crear"
           )
-      }, error = function(e) {
-        showNotification(paste("Error procesando datos:", e$message), type = "error")
-        data.frame()
-      })
+      }
     })
     
-    # Datos filtrados según selección activa en gráficos
     data_filtrada <- reactive({
-      df <- data_cliente()
-      if (nrow(df) == 0) return(df)
-      if (!is.null(filtros$segmento))    df <- df %>% filter(Segmento == filtros$segmento)
-      if (!is.null(filtros$linneg))      df <- df %>% filter(CLLinNegNo == filtros$linneg)
-      if (!is.null(filtros$bucketsacos)) df <- df %>% filter(BucketSacos == filtros$bucketsacos)
+      df<-data_base();if(nrow(df)==0) return(df)
+      if(!is.null(filtros$r1)) df<-df %>% filter(Segmento==filtros$r1)
+      if(!is.null(filtros$r2)) df<-df %>% filter(CLLinNegNo==filtros$r2)
+      if(!is.null(filtros$r3)) df<-df %>% filter(BucketSacos==filtros$r3)
       df
     })
     
-    # Datos para tabla con fila de totales; PrimFact y BucketSacos inicializados en total
-    data_tabla <- reactive({
-      df <- data_filtrada()
-      req(nrow(df) > 0)
-      fila_total <- dc_fila_total(df) %>%
-        mutate(BucketSacos = "", PrimFact = as.Date(NA))
-      df %>%
-        crear_link_cliente(col_razsoc = "PerRazSoc", col_linneg = "CLLinNegNo") %>%
-        select(
-          Oportunidad, PerRazSoc, CLLinNegNo,
-          BucketSacos, Segmento, PrimFact, UltFact,
-          PptoSacos, SacosMes, CumpSacosMes,
-          PptoMargen, MargenMes, CumpMargenMes,
-          PptoSacosYTD, SacosYTD, CumpSacosYTD,
-          PptoMargenYTD, MargenYTD, CumpMargenYTD,
-          SacosCumpPpto, MargenCumpPpto, LblAcum
-        ) %>%
-        bind_rows(fila_total)
+    output$resumen_1 <- renderUI(dc_tabla_resumen(data_base(),"Segmento","Segmento",filtros$r1,ns_id=ns("cr1")))
+    output$resumen_2 <- renderUI(dc_tabla_resumen(data_base(),"CLLinNegNo","Linea de Negocio",filtros$r2,ns_id=ns("cr2")))
+    output$resumen_3 <- renderUI({
+      lvl <- c("Sin compra","<10 sacos","10-49 sacos","50-99 sacos",">=100 sacos")
+      dc_tabla_resumen(data_base(),"BucketSacos","Tamano Primera Compra",filtros$r3,niveles=lvl,ns_id=ns("cr3"))
     })
     
-    # Patrón eager: FormularioOportunidad registrado en startup antes de TablaReactable
-    FormularioOportunidad("mod_formulario",
-                          dat                  = dat,
-                          usr                  = usr,
-                          trigger_update       = trigger_update,
-                          tipo_cliente_default = reactive("CLIENTE")
+    .col_seg_new <- reactable::colDef(name="Segmento",minWidth=140,
+                                      style=function(v) list(background="#EDFBF2",color="#1E8449",fontWeight="600"))
+    .col_bucket <- reactable::colDef(name="Primera Compra",minWidth=170,
+                                     style=function(v) list(
+                                       background=switch(v,">=100 sacos"="#D5F5E3","50-99 sacos"="#EAFAF1",
+                                                         "10-49 sacos"="#FCF3CF","<10 sacos"="#FEF9E7","Sin compra"="#F8F9F9","white"),
+                                       color=switch(v,">=100 sacos"="#1A5226","50-99 sacos"="#1E8449",
+                                                    "10-49 sacos"="#7D6608","<10 sacos"="#9A7D0A","Sin compra"="#707B7C","#333"),
+                                       fontWeight="600"))
+    
+    .col_oculto <- reactable::colDef(show=FALSE)
+    col_ss <- modifyList(.cols_sacos(), list(
+      Segmento=.col_seg_new, BucketSacos=.col_bucket,
+      PptoSacosMes=.col_oculto, CumpSacosMes=.col_oculto,
+      PptoSacosYTD=.col_oculto, CumpSacosYTD=.col_oculto
+    ))
+    col_mg <- modifyList(.cols_margen(), list(
+      Segmento=.col_seg_new, BucketSacos=.col_bucket,
+      PptoMargenMes=.col_oculto, CumpMargenMes=.col_oculto,
+      PptoMargenYTD=.col_oculto, CumpMargenYTD=.col_oculto
+    ))
+    
+    .tot_s_new <- function(df) tibble::tibble(
+      Oportunidad="",PerRazSoc="TOTAL",CLLinNegNo="",BucketSacos="",Segmento="",
+      Asesor="",Presupuestado="",UltFecFact=as.Date(NA),
+      PptoSacosMes=0L, SacosMes=sum(df$SacosMes,na.rm=TRUE), CumpSacosMes=NA_real_,
+      PptoSacosYTD=0L, SacosYTD=sum(df$SacosYTD,na.rm=TRUE), CumpSacosYTD=NA_real_
+    )
+    .tot_m_new <- function(df) tibble::tibble(
+      Oportunidad="",PerRazSoc="TOTAL",CLLinNegNo="",BucketSacos="",Segmento="",
+      Asesor="",Presupuestado="",UltFecFact=as.Date(NA),
+      PptoMargenMes=0L, MargenMes=sum(df$MargenMes,na.rm=TRUE), CumpMargenMes=NA_real_,
+      PptoMargenYTD=0L, MargenYTD=sum(df$MargenYTD,na.rm=TRUE), CumpMargenYTD=NA_real_
     )
     
-    # Niveles ordenados de menor a mayor para el gráfico de tamaño de primera compra
-    lvl_sacos <- c("Sin compra", "<10 sacos", "10-49 sacos", "50-99 sacos", ">=100 sacos")
+    data_sacos_r <- reactive({
+      df<-data_filtrada();req(nrow(df)>0)
+      base <- df %>%
+        crear_link_cliente(col_razsoc="PerRazSoc",col_linneg="CLLinNegNo") %>%
+        select(Oportunidad,PerRazSoc,CLLinNegNo,BucketSacos,Segmento,Asesor,
+               Presupuestado,UltFecFact,PptoSacosMes,SacosMes,CumpSacosMes,
+               PptoSacosYTD,SacosYTD,CumpSacosYTD)
+      bind_rows(base,.tot_s_new(df))
+    })
+    data_margen_r <- reactive({
+      df<-data_filtrada();req(nrow(df)>0)
+      base <- df %>%
+        crear_link_cliente(col_razsoc="PerRazSoc",col_linneg="CLLinNegNo") %>%
+        select(Oportunidad,PerRazSoc,CLLinNegNo,BucketSacos,Segmento,Asesor,
+               Presupuestado,UltFecFact,PptoMargenMes,MargenMes,CumpMargenMes,
+               PptoMargenYTD,MargenYTD,CumpMargenYTD)
+      bind_rows(base,.tot_m_new(df))
+    })
     
-    # Renderizado de gráficos con source IDs namespaceados
-    output$Segmento <- renderPlotly(
-      dc_grafico(data_filtrada(), "Segmento", src_segmento, filtros$segmento)
-    )
-    output$LinNeg <- renderPlotly(
-      dc_grafico(data_filtrada(), "CLLinNegNo", src_linneg, filtros$linneg)
-    )
-    output$BucketSacos <- renderPlotly(
-      dc_grafico(
-        data_filtrada(), "BucketSacos", src_bucketsacos, filtros$bucketsacos,
-        niveles = lvl_sacos
-      )
-    )
-    
-    # Registro diferido de observers de clic para eliminar warnings de plotly
-    dc_registrar_clicks(session,
-                        sources = list(
-                          segmento    = src_segmento,
-                          linneg      = src_linneg,
-                          bucketsacos = src_bucketsacos
-                        ),
-                        filtros = filtros
-    )
-    
-    # Tabla reactable: PrimFact agregado via modifyList; no está en dc_coldefs_comunes.
-    # CORRECCIÓN: col_specs recibe el named list de colDef (antes: argumento columnas).
-    dc_tabla_reactable_base(data_tabla, data_filtrada, ns,
-                            col_specs = modifyList(dc_coldefs_comunes(data_tabla), list(
-                              Segmento = reactable::colDef(
-                                name  = "Segmento", minWidth = 110,
-                                style = function(v) list(
-                                  background = "#EDFBF2", color = "#1E8449", fontWeight = "600"
-                                )
-                              ),
-                              BucketSacos = reactable::colDef(
-                                name  = "Primera Compra", minWidth = 130,
-                                style = function(v) {
-                                  list(
-                                    background = switch(v,
-                                                        ">=100 sacos" = "#D5F5E3",
-                                                        "50-99 sacos" = "#EAFAF1",
-                                                        "10-49 sacos" = "#FCF3CF",
-                                                        "<10 sacos"   = "#FEF9E7",
-                                                        "Sin compra"  = "#F8F9F9",
-                                                        "white"
-                                    ),
-                                    color = switch(v,
-                                                   ">=100 sacos" = "#1A5226",
-                                                   "50-99 sacos" = "#1E8449",
-                                                   "10-49 sacos" = "#7D6608",
-                                                   "<10 sacos"   = "#9A7D0A",
-                                                   "Sin compra"  = "#707B7C",
-                                                   "#333"
-                                    ),
-                                    fontWeight = "600"
-                                  )
-                                }
-                              ),
-                              PrimFact = reactable::colDef(
-                                name = "Primera Factura", minWidth = 130,
-                                cell = function(v) if (is.na(v)) "\u2014" else format(as.Date(v), "%d/%m/%Y")
-                              )
-                            ))
-    )
-    
-    # Descarga Excel de datos filtrados sin fila de totales
-    output$Descargar <- do.call(
-      downloadHandler, dc_descarga(data_filtrada, "clientes_nuevos")
-    )
+    dc_registrar_tablas(ns,data_sacos_r,data_margen_r,col_ss,col_mg,
+                        usr,dat,trigger_update,tipo_cliente="CLIENTE")
+    output$Descargar <- do.call(downloadHandler,dc_descarga(data_filtrada,"nuevos"))
   })
 }

@@ -1,15 +1,18 @@
 # Definiciones y Funciones ----
-# Formatos.
+
+# Formatos globales del módulo
 .fmt_sacos  <- racafe::DefinirFormato("coma")
 .fmt_margen <- racafe::DefinirFormato("dinero")
 .fmt_pct    <- racafe::DefinirFormato("porcentaje")
+
 
 # Semáforo de cumplimiento: >= 100% verde, >= 85% naranja, rojo
 .style_cumpl <- function(v) {
   if (is.null(v) || is.na(v) || is.infinite(v)) return(NULL)
   list(
-    color = if (v >= 1) "#1E8449" else if (v >= 0.85) "#D4780A" else "#C0392B",
-    fontWeight = "600"
+    color      = if (v >= 1) "#1E8449" else if (v >= 0.85) "#D4780A" else "#C0392B",
+    fontWeight = "600",
+    whiteSpace = "nowrap"
   )
 }
 
@@ -19,119 +22,246 @@
   .fmt_pct(v)
 }
 
-# Transformación pura: agrega métricas de Mes Vigente + Año Corrido por cliente
+# Badge visual para la columna Presupuestado
+.badge_presupuestado <- function(v) {
+  if (is.na(v) || is.null(v)) return("\u2014")
+  cfg <- switch(v,
+                "PRESUPUESTADO"    = list(bg = "#D1FAE5", color = "#065F46", label = "Con Ppto"),
+                "NO PRESUPUESTADO" = list(bg = "#FEF3C7", color = "#92400E", label = "Sin Ppto"),
+                list(bg = "#F3F4F6", color = "#6B7280", label = v)
+  )
+  shiny::tags$span(
+    style = paste0(
+      "display:inline-block; padding:2px 8px; border-radius:999px;",
+      "font-size:0.7rem; font-weight:600; white-space:nowrap;",
+      "background:", cfg$bg, "; color:", cfg$color, ";"
+    ),
+    cfg$label
+  )
+}
+
+# Semáforo de antigüedad para la última fecha de factura
+.style_fec_fact <- function(v) {
+  if (is.na(v) || is.null(v)) return(list(color = "#9CA3AF", whiteSpace = "nowrap"))
+  dias <- as.integer(Sys.Date() - as.Date(v))
+  list(
+    whiteSpace = "nowrap",
+    fontWeight = "600",
+    color = if (dias <= 30) "#065F46" else if (dias <= 60) "#92400E" else "#991B1B"
+  )
+}
+
+# Transformación pura: agrega métricas Mes Vigente + Año Corrido por cliente.
+# FIX v2: PPtoSacos/PPtoMargen son invariantes por mes (un único valor por UC-año).
+# Se extraen con first() sobre registros no-NA antes del summarise de ejecución,
+# evitando que el ifelse devuelva 0 cuando la fila del mes_v no tiene ppto
+# (caso del mes inicial donde t2 no fue propagado a ese periodo).
+# FIX v2: Pt_SacosYTD y Pt_MargenYTD se calculan como ppto_mensual × n_meses_ytd,
+# donde n_meses_ytd es el número de meses presentes en dat para esa UC,
+# asegurando coherencia cuando dat llega filtrado a un subconjunto del año.
 .preparar_metricas_cliente <- function(dat, mes_v) {
-  dat %>%
+  
+  # Paso 1: presupuesto mensual único por UC — tomar el primer valor no-NA y > 0
+  ppto_uc <- dat %>%
+    dplyr::group_by(LinNegCod, CliNitPpal) %>%
+    dplyr::summarise(
+      Pt_SacosVig = {
+        vals <- PPtoSacos[!is.na(PPtoSacos) & PPtoSacos > 0]
+        if (length(vals) > 0) vals[[1L]] else dplyr::first(PPtoSacos, default = 0)
+      },
+      Pt_MargenVig = {
+        vals <- PPtoMargen[!is.na(PPtoMargen) & PPtoMargen > 0]
+        if (length(vals) > 0) vals[[1L]] else dplyr::first(PPtoMargen, default = 0)
+      },
+      .groups = "drop"
+    )
+  
+  # Paso 2: ejecución mes vigente, YTD y número de meses del panel para esta UC
+  ejec <- dat %>%
     dplyr::group_by(LinNegCod, CliNitPpal, PerRazSoc, Asesor, Segmento,
                     Presupuestado, UltFecFact) %>%
     dplyr::summarise(
-      Ej_SacosVig = sum(ifelse(FecProceso == mes_v, Sacos, 0), na.rm = TRUE),
-      Pt_SacosVig = sum(ifelse(FecProceso == mes_v, PPtoSacos, 0), na.rm = TRUE),
-      Ej_MargenVig = sum(ifelse(FecProceso == mes_v, Margen, 0), na.rm = TRUE),
-      Pt_MargenVig = sum(ifelse(FecProceso == mes_v, PPtoMargen, 0), na.rm = TRUE),
-      Ej_SacosYTD = sum(Sacos, na.rm = TRUE),
-      Pt_SacosYTD = sum(PPtoSacos, na.rm = TRUE),
+      Ej_SacosVig  = sum(dplyr::if_else(FecProceso == mes_v, Sacos,  0), na.rm = TRUE),
+      Ej_MargenVig = sum(dplyr::if_else(FecProceso == mes_v, Margen, 0), na.rm = TRUE),
+      Ej_SacosYTD  = sum(Sacos,  na.rm = TRUE),
       Ej_MargenYTD = sum(Margen, na.rm = TRUE),
-      Pt_MargenYTD = sum(PPtoMargen, na.rm = TRUE),
+      # Número de meses del panel para esta UC — base del ppto acumulado
+      n_meses_ytd  = dplyr::n_distinct(FecProceso),
       .groups = "drop"
-    ) %>%
+    )
+  
+  # Paso 3: join ppto + métricas derivadas
+  ejec %>%
+    dplyr::left_join(ppto_uc, by = c("LinNegCod", "CliNitPpal")) %>%
     dplyr::mutate(
-      Cump_SacosVig = dplyr::if_else(Pt_SacosVig  > 0, Ej_SacosVig  / Pt_SacosVig, NA_real_),
-      Cump_MargenVig = dplyr::if_else(Pt_MargenVig > 0, Ej_MargenVig / Pt_MargenVig, NA_real_),
-      Cump_SacosYTD = dplyr::if_else(Pt_SacosYTD  > 0, Ej_SacosYTD  / Pt_SacosYTD, NA_real_),
-      Cump_MargenYTD = dplyr::if_else(Pt_MargenYTD > 0, Ej_MargenYTD / Pt_MargenYTD, NA_real_)
+      # Presupuesto YTD = ppto mensual × meses acumulados en el panel
+      Pt_SacosYTD    = Pt_SacosVig  * n_meses_ytd,
+      Pt_MargenYTD   = Pt_MargenVig * n_meses_ytd,
+      Cump_SacosVig  = dplyr::if_else(Pt_SacosVig  > 0, Ej_SacosVig  / Pt_SacosVig,  NA_real_),
+      Cump_MargenVig = dplyr::if_else(Pt_MargenVig > 0, Ej_MargenVig / Pt_MargenVig,  NA_real_),
+      Cump_SacosYTD  = dplyr::if_else(Pt_SacosYTD  > 0, Ej_SacosYTD  / Pt_SacosYTD,  NA_real_),
+      Cump_MargenYTD = dplyr::if_else(Pt_MargenYTD > 0, Ej_MargenYTD / Pt_MargenYTD,  NA_real_)
     ) %>%
     dplyr::select(
       LinNegCod, CliNitPpal, PerRazSoc, Segmento, Asesor, Presupuestado, UltFecFact,
-      Ej_SacosVig, Pt_SacosVig, Cump_SacosVig,
+      Ej_SacosVig,  Pt_SacosVig,  Cump_SacosVig,
       Ej_MargenVig, Pt_MargenVig, Cump_MargenVig,
-      Ej_SacosYTD, Pt_SacosYTD, Cump_SacosYTD,
+      Ej_SacosYTD,  Pt_SacosYTD,  Cump_SacosYTD,
       Ej_MargenYTD, Pt_MargenYTD, Cump_MargenYTD
     )
 }
 
 # Definición centralizada de columnas reactable para el detalle de cliente.
+# v2: badges Presupuestado, semáforo UltFecFact, whiteSpace controlado,
+# minWidth ajustados para que ningún texto quede cortado, fontWeight en YTD.
+# Parámetro incluir_nombres_id: TRUE muestra LinNeg + NIT; FALSE los oculta.
 .coldefs_cliente <- function(incluir_nombres_id = TRUE) {
   
   comunes <- list(
-    PerRazSoc = reactable::colDef(name = "Cliente", minWidth = 250, sticky = "left"),
-    Segmento = reactable::colDef(name = "Segmento", minWidth = 100),
-    Asesor = reactable::colDef(name = "Asesor", minWidth = 120),
-    Presupuestado = reactable::colDef(name = "Presupuesto", minWidth = 130),
-    UltFecFact = reactable::colDef(
-      name = "\u00daltima Factura", minWidth = 110,
-      cell = function(v) if (is.na(v)) "\u2014" else format(as.Date(v), "%d/%m/%Y")
+    
+    PerRazSoc = reactable::colDef(
+      name     = "Cliente",
+      minWidth = 240,
+      sticky   = "left",
+      # Permite wrap en nombres largos para que no queden cortados
+      style    = list(whiteSpace = "normal", lineHeight = "1.35", fontWeight = "500")
     ),
-    # Mes vigente — sacos
+    
+    Segmento = reactable::colDef(
+      name     = "Segmento",
+      minWidth = 120,
+      style    = list(whiteSpace = "nowrap")
+    ),
+    
+    Asesor = reactable::colDef(
+      name     = "Asesor",
+      minWidth = 140,
+      style    = list(whiteSpace = "nowrap")
+    ),
+    
+    Presupuestado = reactable::colDef(
+      name     = "Ppto",
+      minWidth = 110,
+      cell     = function(v) .badge_presupuestado(v)
+    ),
+    
+    UltFecFact = reactable::colDef(
+      name     = "\u00daltima Factura",
+      minWidth = 130,
+      style    = function(v) .style_fec_fact(v),
+      cell     = function(v) if (is.na(v)) "\u2014" else format(as.Date(v), "%d/%m/%Y")
+    ),
+    
+    # --- Mes vigente — sacos ---
     Ej_SacosVig = reactable::colDef(
-      name = "Sacos Mes", minWidth = 100,
-      cell = function(v) if (is.na(v)) "\u2014" else .fmt_sacos(v)
+      name     = "Sacos Mes",
+      minWidth = 110,
+      style    = list(whiteSpace = "nowrap"),
+      cell     = function(v) if (is.na(v) || v == 0) "\u2014" else .fmt_sacos(v)
     ),
     Pt_SacosVig = reactable::colDef(
-      name = "Ppto Sacos Mes", minWidth = 110,
-      cell = function(v) if (is.na(v)) "\u2014" else .fmt_sacos(v)
+      name     = "Ppto Sacos Mes",
+      minWidth = 130,
+      style    = list(whiteSpace = "nowrap", color = "#6B7280"),
+      cell     = function(v) if (is.na(v) || v == 0) "\u2014" else .fmt_sacos(v)
     ),
     Cump_SacosVig = reactable::colDef(
-      name = "% Cumpl Sacos Mes", minWidth = 130,
-      cell = function(v) .cell_cumpl(v), style = function(v) .style_cumpl(v)
+      name     = "% Cumpl Sacos Mes",
+      minWidth = 140,
+      cell     = function(v) .cell_cumpl(v),
+      style    = function(v) .style_cumpl(v)
     ),
-    # Mes vigente — margen
+    
+    # --- Mes vigente — margen ---
     Ej_MargenVig = reactable::colDef(
-      name = "Margen Mes", minWidth = 130,
-      cell = function(v) if (is.na(v)) "\u2014" else .fmt_margen(v)
+      name     = "Margen Mes",
+      minWidth = 140,
+      style    = list(whiteSpace = "nowrap"),
+      cell     = function(v) if (is.na(v) || v == 0) "\u2014" else .fmt_margen(v)
     ),
     Pt_MargenVig = reactable::colDef(
-      name = "Ppto Margen Mes", minWidth = 140,
-      cell = function(v) if (is.na(v)) "\u2014" else .fmt_margen(v)
+      name     = "Ppto Margen Mes",
+      minWidth = 155,
+      style    = list(whiteSpace = "nowrap", color = "#6B7280"),
+      cell     = function(v) if (is.na(v) || v == 0) "\u2014" else .fmt_margen(v)
     ),
     Cump_MargenVig = reactable::colDef(
-      name = "% Cumpl Margen Mes", minWidth = 140,
-      cell = function(v) .cell_cumpl(v), style = function(v) .style_cumpl(v)
+      name     = "% Cumpl Margen Mes",
+      minWidth = 155,
+      cell     = function(v) .cell_cumpl(v),
+      style    = function(v) .style_cumpl(v)
     ),
-    # Año Corrido — sacos
+    
+    # --- Año corrido — sacos ---
     Ej_SacosYTD = reactable::colDef(
-      name = "Sacos A\u00f1o Corrido", minWidth = 100,
-      cell = function(v) if (is.na(v)) "\u2014" else .fmt_sacos(v)
+      name     = "Sacos YTD",
+      minWidth = 110,
+      style    = list(whiteSpace = "nowrap", fontWeight = "600"),
+      cell     = function(v) if (is.na(v) || v == 0) "\u2014" else .fmt_sacos(v)
     ),
     Pt_SacosYTD = reactable::colDef(
-      name = "Ppto Sacos A\u00f1o Corrido", minWidth = 110,
-      cell = function(v) if (is.na(v)) "\u2014" else .fmt_sacos(v)
+      name     = "Ppto Sacos YTD",
+      minWidth = 135,
+      style    = list(whiteSpace = "nowrap", color = "#6B7280"),
+      cell     = function(v) if (is.na(v) || v == 0) "\u2014" else .fmt_sacos(v)
     ),
     Cump_SacosYTD = reactable::colDef(
-      name = "% Cumpl Sacos A\u00f1o Corrido", minWidth = 130,
-      cell = function(v) .cell_cumpl(v), style = function(v) .style_cumpl(v)
+      name     = "% Cumpl Sacos YTD",
+      minWidth = 145,
+      cell     = function(v) .cell_cumpl(v),
+      style    = function(v) .style_cumpl(v)
     ),
-    # Año Corrido — margen
+    
+    # --- Año corrido — margen ---
     Ej_MargenYTD = reactable::colDef(
-      name = "Margen A\u00f1o Corrido", minWidth = 130,
-      cell = function(v) if (is.na(v)) "\u2014" else .fmt_margen(v)
+      name     = "Margen YTD",
+      minWidth = 140,
+      style    = list(whiteSpace = "nowrap", fontWeight = "600"),
+      cell     = function(v) if (is.na(v) || v == 0) "\u2014" else .fmt_margen(v)
     ),
     Pt_MargenYTD = reactable::colDef(
-      name = "Ppto Margen A\u00f1o Corrido", minWidth = 140,
-      cell = function(v) if (is.na(v)) "\u2014" else .fmt_margen(v)
+      name     = "Ppto Margen YTD",
+      minWidth = 155,
+      style    = list(whiteSpace = "nowrap", color = "#6B7280"),
+      cell     = function(v) if (is.na(v) || v == 0) "\u2014" else .fmt_margen(v)
     ),
     Cump_MargenYTD = reactable::colDef(
-      name = "% Cumpl Margen A\u00f1o Corrido", minWidth = 150,
-      cell = function(v) .cell_cumpl(v), style = function(v) .style_cumpl(v)
+      name     = "% Cumpl Margen YTD",
+      minWidth = 160,
+      cell     = function(v) .cell_cumpl(v),
+      style    = function(v) .style_cumpl(v)
     )
   )
   
   cols_id <- if (incluir_nombres_id) {
     list(
-      LinNegCod = reactable::colDef(name = "Lin. Negocio", sticky = "left"),
-      CliNitPpal = reactable::colDef(name = "NIT Ppal", sticky = "left")
+      LinNegCod  = reactable::colDef(
+        name     = "Lin. Neg.",
+        minWidth = 110,
+        sticky   = "left",
+        style    = list(whiteSpace = "nowrap")
+      ),
+      CliNitPpal = reactable::colDef(
+        name       = "NIT Ppal",
+        minWidth   = 110,
+        sticky     = "left",
+        style      = list(whiteSpace = "nowrap", fontFamily = "monospace")
+      )
     )
   } else {
+    # En contextos de cohortes el agrupamiento ya está implícito; se ocultan
     list(
-      LinNegCod = reactable::colDef(show = TRUE, sticky = "left"),
-      CliNitPpal = reactable::colDef(show = TRUE, sticky = "left")
+      LinNegCod  = reactable::colDef(show = FALSE),
+      CliNitPpal = reactable::colDef(show = FALSE)
     )
   }
   
   c(cols_id, comunes)
 }
 
+
 # Modulo Tabla Detalle ----
+
 TablaDetalleClientesUI <- function(id) {
   ns <- shiny::NS(id)
   shiny::tagList(
@@ -140,14 +270,16 @@ TablaDetalleClientesUI <- function(id) {
     shiny::uiOutput(ns("ui_descarga"))
   )
 }
+
 TablaDetalleClientes <- function(id, data, mes_vig, titulo, subtitulo = NULL,
                                  footer = NULL, footer_tipo = "info") {
   shiny::moduleServer(id, function(input, output, session) {
     
-    # Columnas reactable con encabezados amigables — fuente única de verdad
+    # Columnas reactable — fuente única de verdad, con IDs visibles
     .coldefs <- .coldefs_cliente(incluir_nombres_id = TRUE)
     
-    # Reactive de datos transformados — se recalcula solo si data o mes_vig cambian
+    # Reactive de datos transformados — recalcula solo si data o mes_vig cambian.
+    # FIX: .preparar_metricas_cliente v2 resuelve ppto en mes inicial y YTD coherente.
     data_prep <- shiny::reactive({
       shiny::req(data(), mes_vig())
       dat <- data()
@@ -173,17 +305,17 @@ TablaDetalleClientes <- function(id, data, mes_vig, titulo, subtitulo = NULL,
     shiny::observe({
       shiny::req(!is.null(data_prep()))
       racafeModulos::TablaReactable2(
-        id = "tbl",
-        data = data_prep,
-        titulo = titulo,
-        subtitulo = subtitulo,
-        footer = footer,
-        footer_tipo = footer_tipo,
-        col_specs = .coldefs,
-        id_col = "CliNitPpal",
+        id             = "tbl",
+        data           = data_prep,
+        titulo         = titulo,
+        subtitulo      = subtitulo,
+        footer         = footer,
+        footer_tipo    = footer_tipo,
+        col_specs      = .coldefs,
+        id_col         = "CliNitPpal",
         modo_seleccion = "ninguno",
-        searchable = TRUE,
-        page_size = 20L
+        searchable     = TRUE,
+        page_size      = 20L
       )
     })
     
@@ -194,20 +326,17 @@ TablaDetalleClientes <- function(id, data, mes_vig, titulo, subtitulo = NULL,
         style = "display:flex; justify-content:flex-end; margin-bottom:6px;",
         shiny::downloadButton(
           outputId = session$ns("btn_descarga"),
-          label = "Descargar",
-          icon = shiny::icon("download"),
-          class = "btn btn-sm btn-outline-secondary"
+          label    = "Descargar",
+          icon     = shiny::icon("download"),
+          class    = "btn btn-sm btn-outline-secondary"
         )
       )
     })
     
-    # Handler de descarga — exporta data_prep como libro de Excel (.xlsx)
-    # Nota: el comentario original decía "CSV con separador ;", pero el
-    # código siempre escribió .xlsx vía writexl::write_xlsx(); se corrige
-    # aquí solo el comentario, el comportamiento no cambia.
+    # Handler de descarga — exporta data_prep como libro Excel (.xlsx)
     output$btn_descarga <- shiny::downloadHandler(
       filename = function() {
-        tit <- if (shiny::is.reactive(titulo)) titulo() else titulo
+        tit       <- if (shiny::is.reactive(titulo)) titulo() else titulo
         tit_limpio <- gsub("[^A-Za-z0-9_\\-]", "_", tit)
         paste0(tit_limpio, "_", format(Sys.Date(), "%Y%m%d"), ".xlsx")
       },
@@ -219,74 +348,108 @@ TablaDetalleClientes <- function(id, data, mes_vig, titulo, subtitulo = NULL,
   })
 }
 
+
 # Modulo Cohortes ----
+
 CohortesUI <- function(id) {
   ns <- NS(id)
   tagList(
-    # Filtro global de presupuesto — gobierna todo el modulo ----
+    
+    # Filtro global de presupuesto — gobierna todo el módulo ----
     tags$div(
       style = "display:flex; justify-content:flex-end; margin-bottom:8px;",
       racafeShiny::BotonesRadiales(
-        inputId = ns("fil_ppto"), label = "Presupuesto:",
-        choices = c("Total" = "todos", "Con Ppto" = "con", "Sin Ppto" = "sin"),
-        selected = "todos", alineacion = "right")
+        inputId        = ns("fil_ppto"),
+        label          = "Presupuesto:",
+        color_activo   = "firebrick",
+        color_inactivo = "white",
+        choices        = c("Total" = "todos", "Con Ppto" = "con", "Sin Ppto" = "sin"),
+        selected       = "todos",
+        alineacion     = "right"
+      )
     ),
+    
     # Bloque KPIs de periodo: inicio vs mes vigente ----
-    bs4Dash::bs4Card(title = "Resumen de Periodo", width = 12, solidHeader = TRUE,
-                     status = "white", collapsible = TRUE,
-                     # Fila — Mes Inicial
-                     uiOutput(ns("lbl_mes_inicial")),
-                     fluidRow(column(3, racafeModulos::CajaModalUI(ns("kpi_ini_total"))),
-                              column(3, racafeModulos::CajaModalUI(ns("kpi_ini_activo"))),
-                              column(3, racafeModulos::CajaModalUI(ns("kpi_ini_inactivo"))),
-                              column(3, racafeModulos::CajaModalUI(ns("kpi_ini_nuevo")))
-                     ),
-                     tags$hr(style = "margin: 8px 0;"),
-                     # Fila — Mes Vigente
-                     uiOutput(ns("lbl_mes_vigente")),
-                     fluidRow(column(3, racafeModulos::CajaModalUI(ns("kpi_vig_total"))),
-                              column(3, racafeModulos::CajaModalUI(ns("kpi_vig_activo"))),
-                              column(3, racafeModulos::CajaModalUI(ns("kpi_vig_inactivo"))),
-                              column(3, racafeModulos::CajaModalUI(ns("kpi_vig_nuevo")))
-                     ),
-                     tags$hr(style = "margin:10px 0;"),
-                     tags$p(tags$strong("Alertas del Mes Vigente"),
-                            style = "font-weight:700; color:#374151; margin-bottom:4px;"),
-                     fluidRow(
-                       column(6, racafeModulos::CajaModalUI(ns("kpi_vig_en_riesgo"))),
-                       column(6, racafeModulos::CajaModalUI(ns("kpi_vig_por_recuperar")))
-                     )
+    bs4Dash::bs4Card(
+      title       = "Resumen de Periodo",
+      width       = 12,
+      solidHeader = TRUE,
+      status      = "white",
+      collapsible = TRUE,
+      # Fila — Mes Inicial
+      uiOutput(ns("lbl_mes_inicial")),
+      fluidRow(
+        column(3, racafeModulos::CajaModalUI(ns("kpi_ini_total"))),
+        column(3, racafeModulos::CajaModalUI(ns("kpi_ini_activo"))),
+        column(3, racafeModulos::CajaModalUI(ns("kpi_ini_inactivo"))),
+        column(3, racafeModulos::CajaModalUI(ns("kpi_ini_nuevo")))
+      ),
+      tags$hr(style = "margin: 8px 0;"),
+      # Fila — Mes Vigente
+      uiOutput(ns("lbl_mes_vigente")),
+      fluidRow(
+        column(3, racafeModulos::CajaModalUI(ns("kpi_vig_total"))),
+        column(3, racafeModulos::CajaModalUI(ns("kpi_vig_activo"))),
+        column(3, racafeModulos::CajaModalUI(ns("kpi_vig_inactivo"))),
+        column(3, racafeModulos::CajaModalUI(ns("kpi_vig_nuevo")))
+      ),
+      tags$hr(style = "margin:10px 0;"),
+      tags$p(
+        tags$strong("Alertas del Mes Vigente"),
+        style = "font-weight:700; color:#374151; margin-bottom:4px;"
+      ),
+      fluidRow(
+        column(6, racafeModulos::CajaModalUI(ns("kpi_vig_en_riesgo"))),
+        column(6, racafeModulos::CajaModalUI(ns("kpi_vig_por_recuperar")))
+      )
     ),
+    
     # Bloque Indicadores de Transición ----
     bs4Dash::bs4Card(
-      title = "Indicadores de Transici\u00f3n", width = 12,
-      solidHeader = TRUE, status = "white", collapsible = TRUE,
+      title       = "Indicadores de Transici\u00f3n",
+      width       = 12,
+      solidHeader = TRUE,
+      status      = "white",
+      collapsible = TRUE,
       fluidRow(
         # Columna izquierda — matrices de transición
         column(4,
                racafeModulos::TablaReactable2UI(ns("tbl_matriz_trans_abs")),
-               shiny::selectInput(inputId = ns("sel_tipo_matriz"), label = NULL,
-                                  choices = c("% fila (inicio)" = "pct_fila",
-                                              "% columna (vigente)" = "pct_col",
-                                              "% total general" = "pct_total"),
-                                  selected = "pct_fila", width = "100%"),
-               racafeModulos::TablaReactable2UI(ns("tbl_matriz_trans"))),
+               shiny::selectInput(
+                 inputId  = ns("sel_tipo_matriz"),
+                 label    = NULL,
+                 choices  = c(
+                   "% fila (inicio)"    = "pct_fila",
+                   "% columna (vigente)" = "pct_col",
+                   "% total general"    = "pct_total"
+                 ),
+                 selected = "pct_fila",
+                 width    = "100%"
+               ),
+               racafeModulos::TablaReactable2UI(ns("tbl_matriz_trans"))
+        ),
         # Columna derecha — KPIs por grupo
         column(8,
-               # Grupo 1 — tasas de transición
-               tags$p(tags$strong("Tasas de Transici\u00f3n"),
-                      style = "margin:0 0 4px 0; color:#6B7280; font-size:0.8rem;
-                      text-transform:uppercase; letter-spacing:0.04em;"),
+               tags$p(
+                 tags$strong("Tasas de Transici\u00f3n"),
+                 style = paste0(
+                   "margin:0 0 4px 0; color:#6B7280; font-size:0.8rem;",
+                   "text-transform:uppercase; letter-spacing:0.04em;"
+                 )
+               ),
                fluidRow(
                  column(4, racafeModulos::CajaModalUI(ns("kpi_retencion"))),
                  column(4, racafeModulos::CajaModalUI(ns("kpi_churn"))),
                  column(4, racafeModulos::CajaModalUI(ns("kpi_reactivacion")))
                ),
                tags$hr(style = "margin:10px 0;"),
-               # Grupo 2 — volumen y movimiento
-               tags$p(tags$strong("Volumen y Movimiento"),
-                      style = "margin:0 0 4px 0; color:#6B7280; font-size:0.8rem;
-                      text-transform:uppercase; letter-spacing:0.04em;"),
+               tags$p(
+                 tags$strong("Volumen y Movimiento"),
+                 style = paste0(
+                   "margin:0 0 4px 0; color:#6B7280; font-size:0.8rem;",
+                   "text-transform:uppercase; letter-spacing:0.04em;"
+                 )
+               ),
                fluidRow(
                  column(6, racafeModulos::CajaModalUI(ns("kpi_cambio_neto"))),
                  column(6, racafeModulos::CajaModalUI(ns("kpi_estabilidad")))
@@ -294,38 +457,49 @@ CohortesUI <- function(id) {
         )
       )
     ),
+    
     # Resumen mensual por estado ----
-    # Incluye Duracion/Dinamica y Largo Plazo: dependen de tasas mes a mes,
-    # no de la comparacion inicio-fin de la matriz de Transicion.
-    bs4Dash::bs4Card("Resumen Mensual por Estado", width = 12, solidHeader = TRUE,
-                     status = "white", collapsible = TRUE,
-                     # Grupo 3 — duración y dinámica (tasas mes a mes)
-                     tags$p(tags$strong("Duraci\u00f3n y Din\u00e1mica"),
-                            style = "margin:0 0 4px 0; color:#6B7280; font-size:0.8rem;
-                            text-transform:uppercase; letter-spacing:0.04em;"),
-                     fluidRow(
-                       column(4, racafeModulos::CajaModalUI(ns("kpi_vida_activo"))),
-                       column(4, racafeModulos::CajaModalUI(ns("kpi_t_reactiv"))),
-                       column(4, racafeModulos::CajaModalUI(ns("kpi_balance_neto")))
-                     ),
-                     tags$hr(style = "margin:10px 0;"),
-                     # Grupo 4 — largo plazo y valor en riesgo (tasas mes a mes)
-                     tags$p(tags$strong("Largo Plazo y Valor en Riesgo"),
-                            style = "margin:0 0 4px 0; color:#6B7280; font-size:0.8rem;
-                            text-transform:uppercase; letter-spacing:0.04em;"),
-                     fluidRow(
-                       column(3, racafeModulos::CajaModalUI(ns("kpi_pi_activo"))),
-                       column(3, racafeModulos::CajaModalUI(ns("kpi_pi_inactivo"))),
-                       column(3, racafeModulos::CajaModalUI(ns("kpi_sacos_riesgo"))),
-                       column(3, racafeModulos::CajaModalUI(ns("kpi_rev_riesgo")))
-                     ),
-                     tags$hr(style = "margin:10px 0;"),
-                     racafeModulos::TablaReactable2UI(ns("tbl_resumen_mensual")),
-                     plotlyOutput(ns("plot_crecimiento"), height = "400px")
-    ),
-    # ----
+    bs4Dash::bs4Card(
+      "Resumen Mensual por Estado",
+      width       = 12,
+      solidHeader = TRUE,
+      status      = "white",
+      collapsible = TRUE,
+      # Grupo 3 — duración y dinámica (tasas mes a mes)
+      tags$p(
+        tags$strong("Duraci\u00f3n y Din\u00e1mica"),
+        style = paste0(
+          "margin:0 0 4px 0; color:#6B7280; font-size:0.8rem;",
+          "text-transform:uppercase; letter-spacing:0.04em;"
+        )
+      ),
+      fluidRow(
+        column(4, racafeModulos::CajaModalUI(ns("kpi_vida_activo"))),
+        column(4, racafeModulos::CajaModalUI(ns("kpi_t_reactiv"))),
+        column(4, racafeModulos::CajaModalUI(ns("kpi_balance_neto")))
+      ),
+      tags$hr(style = "margin:10px 0;"),
+      # Grupo 4 — largo plazo y valor en riesgo
+      tags$p(
+        tags$strong("Largo Plazo y Valor en Riesgo"),
+        style = paste0(
+          "margin:0 0 4px 0; color:#6B7280; font-size:0.8rem;",
+          "text-transform:uppercase; letter-spacing:0.04em;"
+        )
+      ),
+      fluidRow(
+        column(3, racafeModulos::CajaModalUI(ns("kpi_pi_activo"))),
+        column(3, racafeModulos::CajaModalUI(ns("kpi_pi_inactivo"))),
+        column(3, racafeModulos::CajaModalUI(ns("kpi_sacos_riesgo"))),
+        column(3, racafeModulos::CajaModalUI(ns("kpi_rev_riesgo")))
+      ),
+      tags$hr(style = "margin:10px 0;"),
+      racafeModulos::TablaReactable2UI(ns("tbl_resumen_mensual")),
+      plotlyOutput(ns("plot_crecimiento"), height = "400px")
+    )
   )
 }
+
 Cohortes <- function(id, bd, data_t) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
@@ -334,29 +508,27 @@ Cohortes <- function(id, bd, data_t) {
     .niveles_trans   <- c("ACTIVO", "INACTIVO")
     .niveles_resumen <- c("ACTIVO", "INACTIVO", "NUEVO")
     
-    # Columnas reactable 
-    .coldefs_detalle <- .coldefs_cliente(incluir_nombres_id = FALSE)
     
-    
-    # Helpers ----
+    # Helpers internos ----
     
     # Semáforo de color para KPIs de tasa
     .col_kpi <- function(v, tipo) {
       if (is.null(v) || is.na(v)) return("#999999")
       switch(tipo,
-             retencion = if (v >= 0.80) "#27AE60" else if (v >= 0.60) "#F4A820" else "#E74C3C",
-             churn = if (v <= 0.10) "#27AE60" else if (v <= 0.20) "#F4A820" else "#E74C3C",
+             retencion   = if (v >= 0.80) "#27AE60" else if (v >= 0.60) "#F4A820" else "#E74C3C",
+             churn       = if (v <= 0.10) "#27AE60" else if (v <= 0.20) "#F4A820" else "#E74C3C",
              reactivacion = if (v >= 0.30) "#27AE60" else if (v >= 0.15) "#F4A820" else "#E74C3C",
              "#999999"
       )
     }
     
-    # Conteo de UCs (combinación LinNegCod + CliNitPpal)
+    # Conteo de UCs únicas (LinNegCod + CliNitPpal) en un estado dado
     .n_estado <- function(dat_corte, estado) {
       en_estado <- dat_corte$EstadoPanel == estado
       dplyr::n_distinct(dat_corte$LinNegCod[en_estado], dat_corte$CliNitPpal[en_estado])
     }
-    # Promedio por UC activa en el mes vigente para una métrica 
+    
+    # Promedio por UC para una métrica en un mes dado (solo UCs con valor > 0)
     .promedio_uc_mes <- function(dat, mes, var) {
       prom <- dat %>%
         dplyr::filter(FecProceso == mes, .data[[var]] > 0) %>%
@@ -370,7 +542,7 @@ Cohortes <- function(id, bd, data_t) {
     
     # Datos reactivos ----
     
-    # Fechas
+    # Fechas extremas del panel
     mes_vigente <- reactive({
       req(bd())
       max(bd()$FecProceso, na.rm = TRUE)
@@ -387,12 +559,12 @@ Cohortes <- function(id, bd, data_t) {
         select(LinNegCod, CliNitPpal) %>%
         distinct()
     })
-    # bd filtrado al universo dimensional de data_t y al filtro global de presupuesto
+    
+    # bd filtrado al universo dimensional y al filtro global de presupuesto
     bd_f <- reactive({
       req(bd(), ucs_activas())
       dat <- bd() %>%
         semi_join(ucs_activas(), by = join_by(LinNegCod, CliNitPpal))
-      # Filtro global de presupuesto — "todos" (default) no filtra nada
       if (identical(input$fil_ppto, "con")) {
         dat <- dplyr::filter(dat, Presupuestado == "PRESUPUESTADO")
       } else if (identical(input$fil_ppto, "sin")) {
@@ -400,29 +572,35 @@ Cohortes <- function(id, bd, data_t) {
       }
       dat
     })
-    # Corte vigente: solo el último mes de bd_f
+    
+    # Corte vigente: snapshot del último mes de bd_f
     bd_vig <- reactive({
       req(bd_f(), mes_vigente())
       bd_f() %>% filter(FecProceso == mes_vigente())
     })
-    # Corte inicial: solo el primer mes de bd_f
+    
+    # Corte inicial: snapshot del primer mes de bd_f
     bd_ini <- reactive({
       req(bd_f(), mes_inicio())
       bd_f() %>% filter(FecProceso == mes_inicio())
     })
     
-    # Alertas
+    # Alertas — activos que llegan al límite de inactivación este mes
     alertas_inactivar <- reactive({
       req(bd_vig(), mes_vigente())
       ucs <- bd_vig() %>%
         filter(EstadoPanel == "ACTIVO") %>%
-        mutate(meses_rec = ifelse(is.na(NumMesesRecuperar), 4L, NumMesesRecuperar),
-               fec_lim = UltFecFact %m+% months(meses_rec)) %>%
+        mutate(
+          meses_rec = ifelse(is.na(NumMesesRecuperar), 4L, NumMesesRecuperar),
+          fec_lim   = UltFecFact %m+% months(meses_rec)
+        ) %>%
         filter(!is.na(fec_lim), month(fec_lim) == month(mes_vigente())) %>%
         select(LinNegCod, CliNitPpal)
       bd_f() %>%
         semi_join(ucs, by = join_by(LinNegCod, CliNitPpal))
     })
+    
+    # Alertas — inactivos que facturaron en el mes vigente (próximos a reactivarse)
     alertas_recuperados <- reactive({
       req(bd_vig())
       ucs <- bd_vig() %>%
@@ -432,96 +610,96 @@ Cohortes <- function(id, bd, data_t) {
         semi_join(ucs, by = join_by(LinNegCod, CliNitPpal))
     })
     
-    # Estado inicial/final por UC
+    # Estado inicial/final por UC (excluye NUEVO para la matriz de transición)
     trans_ucs <- reactive({
       req(bd_f(), mes_inicio(), mes_vigente())
-      
       bd_f() %>%
         group_by(LinNegCod, CliNitPpal) %>%
-        filter(FecProceso %in% c(mes_inicio(), mes_vigente()),
-               EstadoPanel != "NUEVO") %>%
+        filter(
+          FecProceso %in% c(mes_inicio(), mes_vigente()),
+          EstadoPanel != "NUEVO"
+        ) %>%
         arrange(FecProceso) %>%
-        summarise(EstadoInicial = dplyr::first(EstadoPanel),
-                  EstadoFinal = dplyr::last(EstadoPanel),
-                  .groups = "drop") %>%
-        mutate(EstadoInicial = factor(EstadoInicial, levels = .niveles_trans),
-               EstadoFinal = factor(EstadoFinal, levels = .niveles_trans))
+        summarise(
+          EstadoInicial = dplyr::first(EstadoPanel),
+          EstadoFinal   = dplyr::last(EstadoPanel),
+          .groups = "drop"
+        ) %>%
+        mutate(
+          EstadoInicial = factor(EstadoInicial, levels = .niveles_trans),
+          EstadoFinal   = factor(EstadoFinal,   levels = .niveles_trans)
+        )
     })
-    # Matriz de transición: estado inicial vs estado final por UC, excluyendo NUEVO
+    
+    # Matriz de transición absoluta: cruce estado inicial vs final por UC
     matriz_trans <- reactive({
       req(trans_ucs())
       trans_ucs() %>%
         count(EstadoInicial, EstadoFinal, name = "Clientes", .drop = FALSE) %>%
-        tidyr::pivot_wider(names_from = EstadoFinal, values_from = Clientes, values_fill = 0) %>%
+        tidyr::pivot_wider(
+          names_from  = EstadoFinal,
+          values_from = Clientes,
+          values_fill = 0
+        ) %>%
         mutate(TOTAL = rowSums(across(where(is.numeric)))) %>%
         bind_rows(
           (.) %>% summarise(EstadoInicial = "TOTAL", across(where(is.numeric), sum))
         )
     })
-    # Fila seleccionada en la matriz absoluta
+    
+    # ID de fila seleccionada en la matriz absoluta (para modal de detalle)
     sel_matriz_estado <- reactiveVal(NULL)
-    # Indicadores derivados de la matriz de transición — solo inicio vs fin
-    # Coherente con lo que muestra la matriz: aa/ai/ia/ii vienen de trans_ucs(),
-    # no de un acumulado de transiciones mes a mes.
+    
+    # Indicadores derivados de la matriz inicio-fin
     indicadores_trans <- reactive({
       req(trans_ucs())
-      
       tt <- trans_ucs()
-      
       aa <- sum(tt$EstadoInicial == "ACTIVO"   & tt$EstadoFinal == "ACTIVO",   na.rm = TRUE)
       ai <- sum(tt$EstadoInicial == "ACTIVO"   & tt$EstadoFinal == "INACTIVO", na.rm = TRUE)
       ia <- sum(tt$EstadoInicial == "INACTIVO" & tt$EstadoFinal == "ACTIVO",   na.rm = TRUE)
       ii <- sum(tt$EstadoInicial == "INACTIVO" & tt$EstadoFinal == "INACTIVO", na.rm = TRUE)
-      
       list(
-        aa = aa,
-        ai = ai,
-        ia = ia,
-        ii = ii,
-        retencion = dplyr::if_else((aa + ai) > 0, aa / (aa + ai), NA_real_),
-        churn = dplyr::if_else((aa + ai) > 0, ai / (aa + ai), NA_real_),
+        aa           = aa,
+        ai           = ai,
+        ia           = ia,
+        ii           = ii,
+        retencion    = dplyr::if_else((aa + ai) > 0, aa / (aa + ai), NA_real_),
+        churn        = dplyr::if_else((aa + ai) > 0, ai / (aa + ai), NA_real_),
         reactivacion = dplyr::if_else((ia + ii) > 0, ia / (ia + ii), NA_real_),
-        activos_ini = .n_estado(bd_ini(), "ACTIVO"),
-        activos_fin = .n_estado(bd_vig(), "ACTIVO"),
-        cambio_neto = .n_estado(bd_vig(), "ACTIVO") - .n_estado(bd_ini(), "ACTIVO")
+        activos_ini  = .n_estado(bd_ini(), "ACTIVO"),
+        activos_fin  = .n_estado(bd_vig(), "ACTIVO"),
+        cambio_neto  = .n_estado(bd_vig(), "ACTIVO") - .n_estado(bd_ini(), "ACTIVO")
       )
     })
-    # Indicadores mes a mes sobre todo el panel — base de Duracion/Dinamica
-    # y Largo Plazo (Markov), que necesitan una tasa de transicion mensual y
-    # no la comparacion acumulada inicio-fin de arriba.
+    
+    # Indicadores mes a mes sobre todo el panel — base de Duración/Dinámica y Largo Plazo.
+    # Construye pares de meses consecutivos y acumula conteos de transición.
     indicadores_mensual <- reactive({
       req(bd_f())
       
-      # Subconjunto invariante en el loop — solo ACTIVO/INACTIVO, columnas mínimas
+      # Subconjunto invariante: solo ACTIVO/INACTIVO, columnas mínimas
       panel_ai <- bd_f() %>%
         dplyr::filter(EstadoPanel %in% c("ACTIVO", "INACTIVO")) %>%
         dplyr::distinct(LinNegCod, CliNitPpal, FecProceso, EstadoPanel)
       
-      # Fechas ordenadas del panel
       fechas <- sort(unique(panel_ai$FecProceso))
       
-      # Si solo hay un mes no hay transiciones posibles
       if (length(fechas) < 2) {
         return(list(aa = 0L, ai = 0L, ia = 0L, ii = 0L,
                     retencion = NA_real_, churn = NA_real_,
                     reactivacion = NA_real_, n_transiciones = 0L))
       }
       
-      # Construir pares de meses consecutivos del panel: t → t+1
+      # Pares de meses consecutivos t → t+1
       pares <- purrr::map_dfr(seq_len(length(fechas) - 1), function(i) {
         t0 <- fechas[i]
         t1 <- fechas[i + 1]
-        
-        # Estado de cada UC en t0 y t1 — solo ACTIVO e INACTIVO
         snap_t0 <- panel_ai %>%
           dplyr::filter(FecProceso == t0) %>%
           dplyr::select(LinNegCod, CliNitPpal, Estado_t0 = EstadoPanel)
-        
         snap_t1 <- panel_ai %>%
           dplyr::filter(FecProceso == t1) %>%
           dplyr::select(LinNegCod, CliNitPpal, Estado_t1 = EstadoPanel)
-        
-        # Solo UCs presentes en ambos meses
         dplyr::inner_join(snap_t0, snap_t1, by = c("LinNegCod", "CliNitPpal"))
       })
       
@@ -531,7 +709,7 @@ Cohortes <- function(id, bd, data_t) {
                     reactivacion = NA_real_, n_transiciones = 0L))
       }
       
-      # Conteo total de cada tipo de transición acumulado en todo el panel
+      # Conteos acumulados de cada tipo de transición
       conteos <- pares %>%
         dplyr::summarise(
           aa = sum(Estado_t0 == "ACTIVO"   & Estado_t1 == "ACTIVO",   na.rm = TRUE),
@@ -545,108 +723,94 @@ Cohortes <- function(id, bd, data_t) {
       ia <- as.integer(conteos$ia)
       ii <- as.integer(conteos$ii)
       
-      # Probabilidades promedio mes a mes
       list(
-        aa = aa,
-        ai = ai,
-        ia = ia,
-        ii = ii,
-        retencion = dplyr::if_else((aa + ai) > 0, aa / (aa + ai), NA_real_),
-        churn = dplyr::if_else((aa + ai) > 0, ai / (aa + ai), NA_real_),
-        reactivacion = dplyr::if_else((ia + ii) > 0, ia / (ia + ii), NA_real_),
+        aa             = aa,
+        ai             = ai,
+        ia             = ia,
+        ii             = ii,
+        retencion      = dplyr::if_else((aa + ai) > 0, aa / (aa + ai), NA_real_),
+        churn          = dplyr::if_else((aa + ai) > 0, ai / (aa + ai), NA_real_),
+        reactivacion   = dplyr::if_else((ia + ii) > 0, ia / (ia + ii), NA_real_),
         n_transiciones = nrow(pares)
       )
     })
+    
+    # Indicadores de duración derivados de las tasas mensuales
     indicadores_duracion <- reactive({
       req(indicadores_mensual())
       ind <- indicadores_mensual()
-      
-      # Guardia: probabilidades válidas y mayores a 0 para evitar división por cero
-      t_vida_activo <- if (!is.na(ind$churn) && ind$churn > 0) {
-        round(1 / ind$churn, 1)
-      } else NA_real_
-      
-      t_reactiv <- if (!is.na(ind$reactivacion) && ind$reactivacion > 0) {
-        round(1 / ind$reactivacion, 1)
-      } else NA_real_
-      
-      # Velocidad de deterioro: períodos para reducir base activa a la mitad
-      # sin reactivación: n = log(0.5) / log(P(A→A))
-      # Nota: este indicador se calcula pero actualmente ningún CajaModal lo
-      # muestra en CohortesUI; se conserva por si hay un consumo planeado.
-      v_deterioro <- if (!is.na(ind$retencion) && ind$retencion > 0 && ind$retencion < 1) {
-        round(log(0.5) / log(ind$retencion), 1)
-      } else NA_real_
-      
-      list(t_vida_activo = t_vida_activo,
-           t_reactiv = t_reactiv,
-           v_deterioro = v_deterioro)
+      list(
+        t_vida_activo = if (!is.na(ind$churn)        && ind$churn        > 0)
+          round(1 / ind$churn, 1)        else NA_real_,
+        t_reactiv     = if (!is.na(ind$reactivacion) && ind$reactivacion > 0)
+          round(1 / ind$reactivacion, 1) else NA_real_,
+        v_deterioro   = if (!is.na(ind$retencion) && ind$retencion > 0 && ind$retencion < 1)
+          round(log(0.5) / log(ind$retencion), 1) else NA_real_
+      )
     })
+    
+    # Estado estacionario de la cadena de Markov (Markov equilibrio)
     estado_estacionario <- reactive({
       req(indicadores_mensual())
       ind   <- indicadores_mensual()
       denom <- (ind$churn %||% 0) + (ind$reactivacion %||% 0)
+      pi_a  <- if (!is.na(denom) && denom > 0) ind$reactivacion / denom else NA_real_
+      pi_i  <- if (!is.na(denom) && denom > 0) ind$churn        / denom else NA_real_
       
-      pi_a <- if (!is.na(denom) && denom > 0) ind$reactivacion / denom else NA_real_
-      pi_i <- if (!is.na(denom) && denom > 0) ind$churn        / denom else NA_real_
-      
-      # Índice de estabilidad: qué tan cerca está la distribución actual del estacionario
-      # Distancia = |%activos_actual - pi_A|
       n_activos_act   <- .n_estado(bd_vig(), "ACTIVO")
       n_inactivos_act <- .n_estado(bd_vig(), "INACTIVO")
       total_actual    <- n_activos_act + n_inactivos_act
       pct_actual_a    <- if (total_actual > 0) n_activos_act / total_actual else NA_real_
+      distancia       <- if (!is.na(pi_a) && !is.na(pct_actual_a))
+        abs(pct_actual_a - pi_a) else NA_real_
       
-      distancia <- if (!is.na(pi_a) && !is.na(pct_actual_a)) {
-        abs(pct_actual_a - pi_a)
-      } else NA_real_
-      
-      list(pi_a = pi_a,
-           pi_i = pi_i,
-           distancia = distancia)
+      list(pi_a = pi_a, pi_i = pi_i, distancia = distancia)
     })
+    
+    # Indicadores de valor en riesgo basados en tasas mensuales
     indicadores_valor <- reactive({
       req(bd_f(), indicadores_mensual())
       ind <- indicadores_mensual()
-      
       n_activos_act <- .n_estado(bd_vig(), "ACTIVO")
       n_inactivos   <- .n_estado(bd_vig(), "INACTIVO")
-      
-      ticket_prom <- .promedio_uc_mes(bd_f(), mes_vigente(), "Margen")
-      sacos_prom <- .promedio_uc_mes(bd_f(), mes_vigente(), "Sacos")
-      
-      # Estimaciones de riesgo y balance
-      rev_riesgo   <- if (!is.na(ind$churn)) n_activos_act * ind$churn * ticket_prom else NA_real_
-      sacos_riesgo <- if (!is.na(ind$churn)) n_activos_act * ind$churn * sacos_prom  else NA_real_
-      balance_neto <- (ind$reactivacion %||% 0) * n_inactivos -
-        (ind$churn        %||% 0) * n_activos_act
-      
-      list(ticket_prom = ticket_prom,
-           sacos_prom = sacos_prom,
-           rev_riesgo = rev_riesgo,
-           sacos_riesgo = sacos_riesgo,
-           balance_neto = balance_neto,
-           n_inactivos = n_inactivos)
+      ticket_prom   <- .promedio_uc_mes(bd_f(), mes_vigente(), "Margen")
+      sacos_prom    <- .promedio_uc_mes(bd_f(), mes_vigente(), "Sacos")
+      list(
+        ticket_prom  = ticket_prom,
+        sacos_prom   = sacos_prom,
+        rev_riesgo   = if (!is.na(ind$churn)) n_activos_act * ind$churn * ticket_prom else NA_real_,
+        sacos_riesgo = if (!is.na(ind$churn)) n_activos_act * ind$churn * sacos_prom  else NA_real_,
+        balance_neto = (ind$reactivacion %||% 0) * n_inactivos -
+          (ind$churn %||% 0) * n_activos_act,
+        n_inactivos  = n_inactivos
+      )
     })
     
-    # Analisis mensual
+    # Resumen mensual por estado para la tabla de tendencia
     resumen_mensual <- reactive({
       req(bd_f())
       bd_f() %>%
         mutate(EstadoPanel = factor(EstadoPanel, levels = .niveles_resumen)) %>%
         group_by(FecProceso, EstadoPanel, .drop = FALSE) %>%
-        summarise(Clientes = dplyr::n_distinct(LinNegCod, CliNitPpal),
-                  .groups = "drop") %>%
+        summarise(
+          Clientes = dplyr::n_distinct(LinNegCod, CliNitPpal),
+          .groups  = "drop"
+        ) %>%
         mutate(Mes = format(FecProceso, "%b-%y")) %>%
         select(-FecProceso) %>%
-        tidyr::pivot_wider(names_from = Mes, values_from = Clientes, values_fill = 0L) %>%
+        tidyr::pivot_wider(
+          names_from  = Mes,
+          values_from = Clientes,
+          values_fill = 0L
+        ) %>%
         rename(Estado = EstadoPanel) %>%
         mutate(Estado = as.character(Estado)) %>%
         janitor::adorn_totals("row", name = "TOTAL")
     })
+    
+    # Serie temporal para el gráfico de crecimiento
     serie_crecimiento <- reactive({
       req(bd_f())
-      
       bd_f() %>%
         dplyr::filter(EstadoPanel %in% c("ACTIVO", "INACTIVO", "NUEVO")) %>%
         dplyr::distinct(FecProceso, LinNegCod, CliNitPpal, EstadoPanel) %>%
@@ -662,676 +826,803 @@ Cohortes <- function(id, bd, data_t) {
         dplyr::mutate(Mes = format(FecProceso, "%b-%y"))
     })
     
-    # Conteos de UC para alertas
-    n_en_riesgo <- reactive(dplyr::n_distinct(alertas_inactivar()$LinNegCod,
-                                              alertas_inactivar()$CliNitPpal))
-    n_recuperando <- reactive(dplyr::n_distinct(alertas_recuperados()$LinNegCod,
-                                                alertas_recuperados()$CliNitPpal))
-    
-    
-    # Outputs ----
-    ## Resumen de Periodo ----
-    ### Helpers y Constantes ----
-    # Intergacion de caja con tabla detalle.
-    .kpi_periodo <- function(corte, tipo) {
-      
-      datos_estado <- reactive({
-        dat <- corte$data()
-        if (!is.null(tipo$estado)) dat <- dplyr::filter(dat, EstadoPanel == tipo$estado)
-        dat
-      })
-      n_uc <- reactive(dplyr::n_distinct(datos_estado()$LinNegCod, datos_estado()$CliNitPpal))
-      
-      id_kpi <- paste0("kpi_", corte$id, "_", tipo$id)
-      id_tbl <- paste0("tbl_mod_", corte$id, "_", tipo$id)
-      
-      titulo_modal <- reactive(paste0(tipo$etiqueta_titulo, " \u2014 ", corte$etiqueta_modal,
-                                      " \u2014 ", format(corte$mes(), "%B %Y")))
-      titulo_tabla <- reactive(paste0(tipo$etiqueta_titulo, " \u2014 ", corte$etiqueta_tabla,
-                                      " \u2014 ", format(corte$mes(), "%B %Y")))
-      footer_tabla <- reactive(paste0(n_uc(), " ", tipo$footer_sufijo, " en el ", corte$etiqueta_footer))
-      
-      racafeModulos::CajaModal(id_kpi,
-                               valor = n_uc,
-                               formato = "coma",
-                               texto = tipo$texto,
-                               icono = tipo$icono,
-                               colores = c(fondo = "white"),
-                               mostrar_boton = TRUE,
-                               titulo_modal = titulo_modal,
-                               icono_modal = NULL,
-                               tamano_modal = "xl",
-                               contenido_modal = function() TablaDetalleClientesUI(ns(id_tbl)),
-                               footer = if (tipo$id == "total") reactive(format(corte$mes(), "Corte %B %Y")) else NULL,
-                               footer_class = "caja-modal-footer")
-      
-      TablaDetalleClientes(id = id_tbl,
-                           data = datos_estado,
-                           mes_vig = mes_vigente,
-                           titulo = titulo_tabla,
-                           subtitulo = if (tipo$id == "total") {
-                             paste0("Todos los estados en el ", corte$etiqueta_footer)
-                           } else NULL,
-                           footer = footer_tabla,
-                           footer_tipo = tipo$footer_tipo)
-    }
-    # Configuración de cortes (inicio / vigente)
-    .cortes_periodo <- list(
-      ini = list(id = "ini", data = bd_ini, mes = mes_inicio,
-                 etiqueta_modal = "Inicio", etiqueta_tabla = "Inicio de Periodo",
-                 etiqueta_footer = "corte inicial"),
-      vig = list(id = "vig", data = bd_vig, mes = mes_vigente,
-                 etiqueta_modal = "Mes Vigente", etiqueta_tabla = "Mes Vigente",
-                 etiqueta_footer = "mes vigente")
+    # Conteos de UC para alertas (reactivos independientes para evitar recálculo)
+    n_en_riesgo  <- reactive(
+      dplyr::n_distinct(alertas_inactivar()$LinNegCod,  alertas_inactivar()$CliNitPpal)
     )
-    # Configuración de tipos de KPI (total / activo / inactivo / nuevo)
-    .tipos_kpi_periodo <- list(
-      total = list(id = "total", estado = NULL, texto = "Total UCs", icono = "users",
-                   etiqueta_titulo = "Detalle", footer_sufijo = "unidades comerciales",
-                   footer_tipo = "info"),
-      activo = list(id = "activo", estado = "ACTIVO", texto = "Activos", icono = "check-circle",
-                    etiqueta_titulo = "Activos", footer_sufijo = "UC(s) activas",
-                    footer_tipo = "info"),
-      inactivo = list(id = "inactivo", estado = "INACTIVO", texto = "A Recuperar",
-                      icono = "exclamation", etiqueta_titulo = "A Recuperar",
-                      footer_sufijo = "UC(s) inactivas", footer_tipo = "warning"),
-      nuevo = list(id = "nuevo", estado = "NUEVO", texto = "Nuevos", icono = "star",
-                   etiqueta_titulo = "Nuevos", footer_sufijo = "UC(s) nuevas",
-                   footer_tipo = "info")
+    n_recuperando <- reactive(
+      dplyr::n_distinct(alertas_recuperados()$LinNegCod, alertas_recuperados()$CliNitPpal)
     )
     
-    
-    ### Periodos ----
-    output$lbl_mes_inicial <- renderUI({
-      tags$h6(paste0("Mes Inicial \u2014 ", format(mes_inicio(), "%B %Y")),
-              style = "font-weight:700; color:#374151;")
-    })
-    output$lbl_mes_vigente <- renderUI({
-      tags$h6(paste0("Mes Vigente \u2014 ", format(mes_vigente(), "%B %Y")),
-              style = "font-weight:700; color:#374151;")
-    })
-    
-    ### KPIs de periodo ----
-    for (corte in .cortes_periodo) {
-      for (tipo in .tipos_kpi_periodo) .kpi_periodo(corte, tipo)
-    }
-    
-    ### KPI clientes en riesgo de inactivarse este mes ----
-    racafeModulos::CajaModal("kpi_vig_en_riesgo",
-                             valor = n_en_riesgo,
-                             formato = "coma",
-                             texto = "En Riesgo",
-                             icono = "exclamation-triangle",
-                             colores = c(fondo = "white"),
-                             mostrar_boton = TRUE,
-                             titulo_modal = reactive({paste0(
-                               "En Riesgo de Inactivarse \u2014 ", format(mes_vigente(), "%B %Y")
-                             )}),
-                             icono_modal = NULL,
-                             tamano_modal = "xl",
-                             contenido_modal = function() {
-                               TablaDetalleClientesUI(ns("tbl_mod_vig_en_riesgo"))
-                             },
-                             footer = reactive({paste0(
-                               n_en_riesgo(), " activos llegan al l\u00edmite de inactivaci\u00f3n este mes"
-                             )}),
-                             footer_class = "caja-modal-footer")
-    
-    TablaDetalleClientes(id = "tbl_mod_vig_en_riesgo",
-                         data = alertas_inactivar,
-                         mes_vig = mes_vigente,
-                         titulo = reactive({paste0(
-                           "En Riesgo de Inactivarse \u2014 ", format(mes_vigente(), "%B %Y")
-                         )}),
-                         subtitulo = "Activos cuya \u00faltima factura alcanza el umbral de inactivaci\u00f3n este mes",
-                         footer = reactive({paste0(
-                           n_en_riesgo(), " UC(s) en riesgo de pasar a 'A Recuperar' este mes"
-                         )}),
-                         footer_tipo = "warning")
-    
-    ### KPI — inactivos que facturaron este mes  ----
-    racafeModulos::CajaModal("kpi_vig_por_recuperar",
-                             valor = n_recuperando,
-                             formato = "coma",
-                             texto = "Recuper\u00e1ndose",
-                             icono = "undo",
-                             colores = c(fondo = "white"),
-                             mostrar_boton = TRUE,
-                             titulo_modal = reactive({paste0(
-                               "Inactivos que Facturaron \u2014 ", format(mes_vigente(), "%B %Y")
-                             )}),
-                             icono_modal = NULL,
-                             tamano_modal = "xl",
-                             contenido_modal = function() {
-                               TablaDetalleClientesUI(ns("tbl_mod_vig_por_recuperar"))
-                             },
-                             footer = reactive({paste0(
-                               n_recuperando(), " inactivos con factura en el mes \u2014 pr\u00f3ximos a reactivarse"
-                             )}),
-                             footer_class = "caja-modal-footer")
-    
-    TablaDetalleClientes(id = "tbl_mod_vig_por_recuperar",
-                         data = alertas_recuperados,
-                         mes_vig = mes_vigente,
-                         titulo = reactive({paste0(
-                           "Inactivos que Facturaron \u2014 ", format(mes_vigente(), "%B %Y")
-                         )}),
-                         subtitulo = "Inactivos con compra en el mes vigente \u2014 candidatos a reactivaci\u00f3n",
-                         footer = reactive({paste0(
-                           n_recuperando(), " UC(s) inactivas con facturaci\u00f3n en el mes vigente"
-                         )}),
-                         footer_tipo = "info")
-    
-    
-    ## Indicadores de Transición ----
-    ### Matrices de Transición -----
-    # Matriz Absoluta.
-    TablaDetalleClientes(id = "tbl_mod_matriz_total",
-                         data = reactive({
-                           req(sel_matriz_estado(), trans_ucs())
-                           ucs_sel <- trans_ucs() %>%
-                             dplyr::filter(EstadoInicial == sel_matriz_estado()) %>%
-                             dplyr::select(LinNegCod, CliNitPpal)
-                           bd_f() %>%
-                             dplyr::semi_join(ucs_sel, by = dplyr::join_by(LinNegCod, CliNitPpal))
-                         }),
-                         mes_vig = mes_vigente,
-                         titulo = reactive({paste0(
-                           "Detalle \u2014 Estado Inicial: ", sel_matriz_estado() %||% "", " \u2014 ",
-                           format(mes_inicio(), "%b %Y"), " \u2192 ", format(mes_vigente(), "%b %Y")
-                         )}),
-                         subtitulo = "Clientes cuyo estado inicial corresponde a la fila seleccionada",
-                         footer = reactive({
-                           req(sel_matriz_estado(), trans_ucs())
-                           n <- trans_ucs() %>%
-                             dplyr::filter(EstadoInicial == sel_matriz_estado()) %>%
-                             nrow()
-                           paste0(n, " unidades comerciales con estado inicial '", sel_matriz_estado(), "'")
-                         }),
-                         footer_tipo = "info")
-    
-    # Matriz absoluta — modo fila para habilitar modal de detalle
-    racafeModulos::TablaReactable2(id = "tbl_matriz_trans_abs",
-                                   data = reactive({
-                                     req(matriz_trans())
-                                     matriz_trans() %>% dplyr::rename(Estado = EstadoInicial)
-                                   }),
-                                   titulo = "Transiciones",
-                                   subtitulo = reactive({paste0(
-                                     format(mes_inicio(), "%b %Y"), " \u2192 ", format(mes_vigente(), "%b %Y")
-                                   )}),
-                                   footer = reactive({
-                                     ind <- indicadores_trans()
-                                     paste0(
-                                       "Retuvieron: ",       ind$aa, "<br/>",
-                                       "Se perdieron: ",     ind$ai, "<br/>",
-                                       "Se recuperaron: ",   ind$ia, "<br/>",
-                                       "Siguen inactivos: ", ind$ii
-                                     ) %>% HTML
-                                   }),
-                                   id_col = "Estado",
-                                   col_specs = list(Estado = reactable::colDef(name = "Estado Inicial", minWidth = 120, sticky = "left"),
-                                                    ACTIVO = reactable::colDef(name = "Activo",   minWidth = 80),
-                                                    INACTIVO = reactable::colDef(name = "Inactivo", minWidth = 80),
-                                                    TOTAL = reactable::colDef(name = "Total",    minWidth = 80,
-                                                                              style = list(fontWeight = "bold"))),
-                                   modo_seleccion = "fila",
-                                   filas_bloqueadas = as.character(length(.niveles_trans)),
-                                   searchable = FALSE,
-                                   sortable = FALSE,
-                                   page_size = 10L,
-                                   modal_titulo_fn = function(sel) paste0("Detalle \u2014 ", sel$id),
-                                   modal_pre_fn = function(sel) sel_matriz_estado(as.character(sel$id)),
-                                   modal_contenido_fn = function(sel) TablaDetalleClientesUI(session$ns("tbl_mod_matriz_total")),
-                                   modal_size = "xl")
-    
-    # Matriz porcentual
-    racafeModulos::TablaReactable2(id = "tbl_matriz_trans",
-                                   data = reactive({
-                                     req(matriz_trans(), input$sel_tipo_matriz)
-                                     m     <- matriz_trans()
-                                     datos <- m %>% dplyr::filter(EstadoInicial != "TOTAL")
-                                     tot_g <- sum(datos$ACTIVO, na.rm = TRUE) + sum(datos$INACTIVO, na.rm = TRUE)
-                                     tot_a <- sum(datos$ACTIVO,   na.rm = TRUE)
-                                     tot_i <- sum(datos$INACTIVO, na.rm = TRUE)
-                                     
-                                     result <- switch(input$sel_tipo_matriz,
-                                                      pct_fila = m %>%
-                                                        dplyr::mutate(
-                                                          ACTIVO = ifelse(TOTAL > 0, ACTIVO   / TOTAL, NA_real_),
-                                                          INACTIVO = ifelse(TOTAL > 0, INACTIVO / TOTAL, NA_real_),
-                                                          TOTAL = ifelse(TOTAL > 0, 1,                NA_real_)
-                                                        ),
-                                                      pct_col = m %>%
-                                                        dplyr::mutate(
-                                                          ACTIVO = if (tot_a > 0) ACTIVO   / tot_a else NA_real_,
-                                                          INACTIVO = if (tot_i > 0) INACTIVO / tot_i else NA_real_,
-                                                          TOTAL = if (tot_g > 0) TOTAL    / tot_g else NA_real_
-                                                        ),
-                                                      pct_total = m %>%
-                                                        dplyr::mutate(
-                                                          ACTIVO = if (tot_g > 0) ACTIVO   / tot_g else NA_real_,
-                                                          INACTIVO = if (tot_g > 0) INACTIVO / tot_g else NA_real_,
-                                                          TOTAL = if (tot_g > 0) TOTAL    / tot_g else NA_real_
-                                                        )
-                                     )
-                                     result %>% dplyr::rename(Estado = EstadoInicial)
-                                   }),
-                                   titulo = reactive({
-                                     switch(input$sel_tipo_matriz,
-                                            pct_fila = "Transiciones \u2014 % Fila (origen)",
-                                            pct_col = "Transiciones \u2014 % Columna (destino)",
-                                            pct_total = "Transiciones \u2014 % Total general"
-                                     )
-                                   }),
-                                   subtitulo = reactive({paste0(
-                                     format(mes_inicio(), "%b %Y"), " \u2192 ", format(mes_vigente(), "%b %Y")
-                                   )}),
-                                   footer = reactive({
-                                     ind <- indicadores_trans()
-                                     switch(input$sel_tipo_matriz,
-                                            pct_fila = paste0(
-                                              "De cada 100 activos al inicio: ",
-                                              round((ind$retencion %||% 0) * 100, 1), " siguen activos, ",
-                                              round((ind$churn     %||% 0) * 100, 1), " se perdieron"
-                                            ) %>% HTML,
-                                            pct_col = paste0(
-                                              "De cada 100 activos al cierre: ",
-                                              round((ind$retencion %||% 0) * 100, 1), " ya eran activos antes"
-                                            ) %>% HTML,
-                                            pct_total = {
-                                              total <- ind$aa + ind$ai + ind$ia + ind$ii
-                                              v     <- if (total > 0) (ind$aa + ind$ii) / total else NA_real_
-                                              paste0(round((v %||% 0) * 100, 1),
-                                                     "% del panel no cambi\u00f3 de estado en el periodo") %>% HTML
-                                            }
-                                     )
-                                   }),
-                                   id_col = "Estado",
-                                   col_specs = list(
-                                     Estado = reactable::colDef(name = "Estado Inicial", minWidth = 120, sticky = "left"),
-                                     ACTIVO = reactable::colDef(name = "Activo",   minWidth = 80,
-                                                                cell = function(v) if (is.na(v)) "\u2014" else .fmt_pct(v)),
-                                     INACTIVO = reactable::colDef(name = "Inactivo", minWidth = 80,
-                                                                  cell = function(v) if (is.na(v)) "\u2014" else .fmt_pct(v)),
-                                     TOTAL = reactable::colDef(name = "Total",    minWidth = 80,
-                                                               cell = function(v) if (is.na(v)) "\u2014" else .fmt_pct(v),
-                                                               style = list(fontWeight = "bold"))
-                                   ),
-                                   modo_seleccion = "ninguno",
-                                   searchable = FALSE,
-                                   sortable = FALSE,
-                                   page_size = 10L)
-    
-    ### KPIs de tasa ----
-    racafeModulos::CajaModal("kpi_retencion",
-                             valor = reactive({
-                               v <- indicadores_trans()$retencion
-                               racafeModulos::html_valor(
-                                 v %||% 0, formato = "porcentaje",
-                                 color = .col_kpi(v, "retencion")
-                               )
-                             }),
-                             texto = "Retenci\u00f3n Activos",
-                             icono = "check-double",
-                             colores = c(fondo = "white"),
-                             mostrar_boton = FALSE,
-                             footer = reactive({
-                               ind <- indicadores_trans()
-                               paste0(
-                                 ind$aa, " clientes activos se mantuvieron<br/>",
-                                 "Activos al inicio: ", ind$activos_ini,
-                                 " \u2014 al cierre: ", ind$activos_fin
-                               ) %>% HTML
-                             }),
-                             footer_class = "caja-modal-footer")
-    
-    racafeModulos::CajaModal("kpi_churn",
-                             valor = reactive({
-                               v <- indicadores_trans()$churn
-                               racafeModulos::html_valor(
-                                 v %||% 0, formato = "porcentaje",
-                                 color = .col_kpi(v, "churn")
-                               )
-                             }),
-                             texto = "P\u00e9rdida (Churn)",
-                             icono = "arrow-down",
-                             colores = c(fondo = "white"),
-                             mostrar_boton = FALSE,
-                             footer = reactive({
-                               ind     <- indicadores_trans()
-                               neto_txt <- if (ind$cambio_neto >= 0) {
-                                 paste0("+", ind$cambio_neto)
-                               } else {
-                                 as.character(ind$cambio_neto)
-                               }
-                               paste0(
-                                 ind$ai, " clientes dejaron de comprar<br/>",
-                                 "Cambio neto de la base: ", neto_txt, " clientes"
-                               ) %>% HTML
-                             }),
-                             footer_class = "caja-modal-footer")
-    
-    racafeModulos::CajaModal("kpi_reactivacion",
-                             valor = reactive({
-                               v <- indicadores_trans()$reactivacion
-                               racafeModulos::html_valor(
-                                 v %||% 0, formato = "porcentaje",
-                                 color = .col_kpi(v, "reactivacion")
-                               )
-                             }),
-                             texto = "Reactivaci\u00f3n",
-                             icono = "sync-alt",
-                             colores = c(fondo = "white"),
-                             mostrar_boton = FALSE,
-                             footer = reactive({
-                               ind <- indicadores_trans()
-                               paste0(
-                                 ind$ia, " inactivos volvieron a comprar<br/>",
-                                 ind$ii, " permanecen sin facturar"
-                               ) %>% HTML
-                             }),
-                             footer_class = "caja-modal-footer")
-    
-    ### KPIs de volumen ----
-    
-    racafeModulos::CajaModal("kpi_cambio_neto",
-                             valor = reactive({
-                               v     <- indicadores_trans()$cambio_neto
-                               color <- if (is.na(v)) "#999999" else if (v >= 0) "#27AE60" else "#E74C3C"
-                               racafeModulos::html_valor(v, formato = "coma", color = color)
-                             }),
-                             texto = "Cambio Neto",
-                             icono = "exchange-alt",
-                             colores = c(fondo = "white"),
-                             mostrar_boton = FALSE,
-                             footer = reactive({
-                               ind <- indicadores_trans()
-                               tendencia <- if (ind$cambio_neto > 0) {
-                                 paste0("La base de activos creci\u00f3 en ", ind$cambio_neto, " clientes")
-                               } else if (ind$cambio_neto < 0) {
-                                 paste0("La base de activos se redujo en ", abs(ind$cambio_neto), " clientes")
-                               } else {
-                                 "La base no cambi\u00f3 de tama\u00f1o"
-                               }
-                               paste0(
-                                 ind$ia, " recuperados vs ", ind$ai, " perdidos<br/>",
-                                 tendencia
-                               ) %>% HTML
-                             }),
-                             footer_class = "caja-modal-footer")
-    
-    racafeModulos::CajaModal("kpi_estabilidad",
-                             valor = reactive({
-                               ind   <- indicadores_trans()
-                               total <- ind$aa + ind$ai + ind$ia + ind$ii
-                               v     <- dplyr::if_else(total > 0, (ind$aa + ind$ii) / total, NA_real_)
-                               racafeModulos::html_valor(
-                                 v %||% 0, formato = "porcentaje",
-                                 color = if (is.na(v))       "#999999"
-                                 else if (v >= 0.75) "#27AE60"
-                                 else if (v >= 0.55) "#F4A820"
-                                 else                "#E74C3C"
-                               )
-                             }),
-                             texto = "Estabilidad",
-                             icono = "anchor",
-                             colores = c(fondo = "white"),
-                             mostrar_boton = FALSE,
-                             footer = reactive({
-                               ind   <- indicadores_trans()
-                               total <- ind$aa + ind$ai + ind$ia + ind$ii
-                               paste0(
-                                 ind$aa + ind$ii, " de ", total,
-                                 " clientes no cambiaron de estado"
-                               ) %>% HTML
-                             }),
-                             footer_class = "caja-modal-footer")
-    
-    ## Resumen mensual por estado ----
-    ### KPIs de duración y dinámica (tasas mes a mes) ----
-    racafeModulos::CajaModal("kpi_vida_activo",
-                             valor = reactive({
-                               v <- indicadores_duracion()$t_vida_activo
-                               racafeModulos::html_valor(
-                                 v %||% 0, formato = "coma",
-                                 color = if (is.na(v))     "#999999"
-                                 else if (v >= 6)  "#27AE60"
-                                 else if (v >= 3)  "#F4A820"
-                                 else              "#E74C3C"
-                               )
-                             }),
-                             texto = "Vida Media Activo (meses)",
-                             icono = "hourglass-half",
-                             colores = c(fondo = "white"),
-                             mostrar_boton = FALSE,
-                             footer = reactive({
-                               v   <- indicadores_duracion()$t_vida_activo
-                               if (is.na(v)) {
-                                 "Sin suficientes transiciones para calcular."
-                               } else {
-                                 paste0(
-                                   "Meses promedio que un cliente permanece activo",
-                                   " antes de inactivarse"
-                                 ) %>% HTML
-                               }
-                             }),
-                             footer_class = "caja-modal-footer")
-    
-    racafeModulos::CajaModal("kpi_t_reactiv",
-                             valor = reactive({
-                               v <- indicadores_duracion()$t_reactiv
-                               racafeModulos::html_valor(
-                                 v %||% 0, formato = "coma",
-                                 color = if (is.na(v))     "#999999"
-                                 else if (v <= 3)  "#27AE60"
-                                 else if (v <= 6)  "#F4A820"
-                                 else              "#E74C3C"
-                               )
-                             }),
-                             texto = "Tiempo de Reactivaci\u00f3n (meses)",
-                             icono = "clock",
-                             colores = c(fondo = "white"),
-                             mostrar_boton = FALSE,
-                             footer = reactive({
-                               v <- indicadores_duracion()$t_reactiv
-                               if (is.na(v)) {
-                                 "Sin suficientes transiciones para calcular."
-                               } else {
-                                 paste0(
-                                   "Meses promedio que tarda un inactivo en volver a comprar.<br/>",
-                                   "<strong>Nota:</strong> los que nunca regresan no se cuentan,",
-                                   " lo que reduce el promedio observado."
-                                 ) %>% HTML
-                               }
-                             }),
-                             footer_class = "caja-modal-footer")
-    
-    racafeModulos::CajaModal("kpi_balance_neto",
-                             valor = reactive({
-                               v     <- indicadores_valor()$balance_neto
-                               color <- if (is.na(v))   "#999999"
-                               else if (v > 0)  "#27AE60"
-                               else if (v == 0) "#F4A820"
-                               else             "#E74C3C"
-                               racafeModulos::html_valor(
-                                 round(v %||% 0, 1), formato = "coma", color = color
-                               )
-                             }),
-                             texto = "Balance Neto de Base",
-                             icono = "balance-scale",
-                             colores = c(fondo = "white"),
-                             mostrar_boton = FALSE,
-                             footer = reactive({
-                               val      <- indicadores_valor()
-                               tendencia <- if (val$balance_neto > 0) {
-                                 "<strong>La base est\u00e1 creciendo.</strong>"
-                               } else if (val$balance_neto < 0) {
-                                 "<strong>La base est\u00e1 decreciendo.</strong>"
-                               } else {
-                                 "<strong>La base est\u00e1 estable.</strong>"
-                               }
-                               paste0(
-                                 tendencia, "<br/>",
-                                 "Recuperaciones esperadas vs p\u00e9rdidas esperadas por mes.<br/>",
-                                 "<strong>Nota:</strong> asume que las tasas mensuales",
-                                 " se mantienen constantes el pr\u00f3ximo mes."
-                               ) %>% HTML
-                             }),
-                             footer_class = "caja-modal-footer")
-    
-    ### KPIs de largo plazo y valor en riesgo (tasas mes a mes) ----
-    racafeModulos::CajaModal("kpi_pi_activo",
-                             valor = reactive({
-                               v <- estado_estacionario()$pi_a
-                               racafeModulos::html_valor(
-                                 v %||% 0, formato = "porcentaje",
-                                 color = if (is.na(v))       "#999999"
-                                 else if (v >= 0.60) "#27AE60"
-                                 else if (v >= 0.40) "#F4A820"
-                                 else                "#E74C3C"
-                               )
-                             }),
-                             texto = "Activos en Largo Plazo",
-                             icono = "infinity",
-                             colores = c(fondo = "white"),
-                             mostrar_boton = FALSE,
-                             footer = reactive({
-                               ee <- estado_estacionario()
-                               if (is.na(ee$pi_a)) {
-                                 "Sin suficientes transiciones para proyectar."
-                               } else {
-                                 paste0(
-                                   "Proporci\u00f3n a la que converge la base activa",
-                                   " si las tasas no cambian.<br/>",
-                                   "Distancia al equilibrio hoy: ",
-                                   .fmt_pct(ee$distancia %||% 0), "<br/>",
-                                   "<strong>Nota:</strong> asume tasas constantes."
-                                 ) %>% HTML
-                               }
-                             }),
-                             footer_class = "caja-modal-footer")
-    
-    racafeModulos::CajaModal("kpi_pi_inactivo",
-                             valor = reactive({
-                               v <- estado_estacionario()$pi_i
-                               racafeModulos::html_valor(
-                                 v %||% 0, formato = "porcentaje",
-                                 color = if (is.na(v))       "#999999"
-                                 else if (v <= 0.30) "#27AE60"
-                                 else if (v <= 0.50) "#F4A820"
-                                 else                "#E74C3C"
-                               )
-                             }),
-                             texto = "Inactivos en Largo Plazo",
-                             icono = "moon",
-                             colores = c(fondo = "white"),
-                             mostrar_boton = FALSE,
-                             footer = reactive({
-                               ee <- estado_estacionario()$pi_i
-                               if (is.na(ee)) {
-                                 "Sin suficientes transiciones para proyectar."
-                               } else {
-                                 paste0(
-                                   "Proporci\u00f3n estructural de inactivos",
-                                   " si las tasas no cambian"
-                                 ) %>% HTML
-                               }
-                             }),
-                             footer_class = "caja-modal-footer")
-    
-    # KPI de valor — sacos en riesgo
-    racafeModulos::CajaModal("kpi_sacos_riesgo",
-                             valor = reactive({
-                               v <- indicadores_valor()$sacos_riesgo
-                               racafeModulos::html_valor(
-                                 v %||% 0, formato = "coma",
-                                 color = if (is.na(v)) "#999999" else "#E74C3C"
-                               )
-                             }),
-                             texto = "Sacos en Riesgo",
-                             icono = "exclamation-triangle",
-                             colores = c(fondo = "white"),
-                             mostrar_boton = FALSE,
-                             footer = reactive({
-                               paste0("Sacos mensuales en riesgo si el churn se mantiene") %>% HTML
-                             }),
-                             footer_class = "caja-modal-footer")
-    
-    racafeModulos::CajaModal("kpi_rev_riesgo",
-                             valor = reactive({
-                               v <- indicadores_valor()$rev_riesgo
-                               racafeModulos::html_valor(
-                                 v %||% 0, formato = "dinero",
-                                 color = if (is.na(v)) "#999999" else "#E74C3C"
-                               )
-                             }),
-                             texto = "Margen en Riesgo",
-                             icono = "dollar-sign",
-                             colores = c(fondo = "white"),
-                             mostrar_boton = FALSE,
-                             footer = reactive({
-                               paste0(
-                                 "Margen mensual en riesgo si el churn se mantiene") %>% HTML
-                             }),
-                             footer_class = "caja-modal-footer")
-    
+    # Mapa mes-etiqueta → fecha real (para modal del resumen mensual)
     mapa_mes_fecha <- reactive({
       req(bd_f())
       fechas <- sort(unique(bd_f()$FecProceso))
       stats::setNames(fechas, format(fechas, "%b-%y"))
     })
+    
+    # Estado reactivo de la celda seleccionada en la tabla de resumen mensual
     sel_resumen <- reactiveValues(estado = NULL, mes = NULL)
     
-    racafeModulos::TablaReactable2(id = "tbl_resumen_mensual",
-                                   data = resumen_mensual,
-                                   titulo = "Clientes por Estado y Mes",
-                                   subtitulo = "Conteo de unidades comerciales \u00fanicas \u2014 clic en una celda para ver el detalle",
-                                   id_col = "Estado",
-                                   col_specs = list(Estado = reactable::colDef(name = "Estado", minWidth = 140, sticky = "left")),
-                                   modo_seleccion = "celda",
-                                   filas_bloqueadas = as.character(length(.niveles_resumen)),
-                                   searchable = FALSE,
-                                   sortable = FALSE,
-                                   page_size = 10L,
-                                   modal_titulo_fn = function(sel) paste0(sel$id, " \u2014 ", sel$col),
-                                   modal_contenido_fn = function(sel) {
-                                     sel_resumen$estado <- sel$id
-                                     sel_resumen$mes    <- sel$col
-                                     TablaDetalleClientesUI(ns("tbl_mod_resumen_celda"))
-                                   },
-                                   modal_size = "xl")
     
-    # Detalle filtrado por la celda seleccionada — fuente del modal
-    TablaDetalleClientes(id = "tbl_mod_resumen_celda",
-                         data = reactive({
-                           req(sel_resumen$estado, sel_resumen$mes, mapa_mes_fecha())
-                           fecha_sel <- mapa_mes_fecha()[[sel_resumen$mes]]
-                           req(!is.null(fecha_sel))
-                           bd_f() %>%
-                             dplyr::filter(FecProceso == fecha_sel, EstadoPanel == sel_resumen$estado)
-                         }),
-                         mes_vig = reactive({
-                           req(sel_resumen$mes, mapa_mes_fecha())
-                           mapa_mes_fecha()[[sel_resumen$mes]]
-                         }),
-                         titulo = reactive({
-                           req(sel_resumen$estado, sel_resumen$mes)
-                           paste0(sel_resumen$estado, " \u2014 ", sel_resumen$mes)
-                         }),
-                         subtitulo = "Detalle de unidades comerciales para la celda seleccionada",
-                         footer = reactive({
-                           req(sel_resumen$estado, sel_resumen$mes, mapa_mes_fecha())
-                           fecha_sel <- mapa_mes_fecha()[[sel_resumen$mes]]
-                           n <- bd_f() %>%
-                             dplyr::filter(FecProceso == fecha_sel, EstadoPanel == sel_resumen$estado) %>%
-                             dplyr::summarise(n = dplyr::n_distinct(LinNegCod, CliNitPpal)) %>%
-                             dplyr::pull(n)
-                           paste0(n, " UC(s) en estado ", sel_resumen$estado, " \u2014 ", sel_resumen$mes)
-                         }),
-                         footer_tipo = "info")
+    # Outputs ----
     
-    # Crecimiento
+    ## Resumen de Periodo ----
+    
+    ### Helper .kpi_periodo — integra CajaModal + TablaDetalleClientes ----
+    # Encapsula la lógica repetida de los 8 KPIs de periodo (ini/vig × 4 tipos).
+    # FIX YTD: data recibe el acumulado hasta el mes del corte, no solo el snapshot.
+    # Así Ej_SacosYTD refleja todos los meses hasta ese corte, no solo uno.
+    .kpi_periodo <- function(corte, tipo) {
+      
+      # Acumulado YTD hasta el mes del corte, filtrado por estado si aplica
+      datos_estado <- reactive({
+        dat <- bd_f() %>% dplyr::filter(FecProceso <= corte$mes())
+        if (!is.null(tipo$estado)) {
+          ucs_en_corte <- corte$data() %>%
+            dplyr::filter(EstadoPanel == tipo$estado) %>%
+            dplyr::select(LinNegCod, CliNitPpal)
+          dat <- dplyr::semi_join(dat, ucs_en_corte, by = c("LinNegCod", "CliNitPpal"))
+        }
+        dat
+      })
+      n_uc <- reactive(dplyr::n_distinct(
+        corte$data() %>%
+          { if (!is.null(tipo$estado)) dplyr::filter(., EstadoPanel == tipo$estado) else . } %>%
+          dplyr::pull(LinNegCod),
+        corte$data() %>%
+          { if (!is.null(tipo$estado)) dplyr::filter(., EstadoPanel == tipo$estado) else . } %>%
+          dplyr::pull(CliNitPpal)
+      ))
+      
+      id_kpi <- paste0("kpi_", corte$id, "_", tipo$id)
+      id_tbl <- paste0("tbl_mod_", corte$id, "_", tipo$id)
+      
+      titulo_modal <- reactive(paste0(
+        tipo$etiqueta_titulo, " \u2014 ", corte$etiqueta_modal,
+        " \u2014 ", format(corte$mes(), "%B %Y")
+      ))
+      titulo_tabla <- reactive(paste0(
+        tipo$etiqueta_titulo, " \u2014 ", corte$etiqueta_tabla,
+        " \u2014 ", format(corte$mes(), "%B %Y")
+      ))
+      footer_tabla <- reactive(paste0(
+        n_uc(), " ", tipo$footer_sufijo, " en el ", corte$etiqueta_footer
+      ))
+      
+      racafeModulos::CajaModal(
+        id_kpi,
+        valor          = n_uc,
+        formato        = "coma",
+        texto          = tipo$texto,
+        icono          = tipo$icono,
+        colores        = c(fondo = "white"),
+        mostrar_boton  = TRUE,
+        titulo_modal   = titulo_modal,
+        icono_modal    = NULL,
+        tamano_modal   = "xl",
+        contenido_modal = function() TablaDetalleClientesUI(ns(id_tbl)),
+        footer         = if (tipo$id == "total")
+          reactive(format(corte$mes(), "Corte %B %Y")) else NULL,
+        footer_class   = "caja-modal-footer"
+      )
+      
+      TablaDetalleClientes(
+        id          = id_tbl,
+        data        = datos_estado,
+        mes_vig     = corte$mes,
+        titulo      = titulo_tabla,
+        subtitulo   = if (tipo$id == "total") {
+          paste0("Todos los estados en el ", corte$etiqueta_footer)
+        } else NULL,
+        footer      = footer_tabla,
+        footer_tipo = tipo$footer_tipo
+      )
+    }
+    
+    # Configuración de cortes (inicio / vigente)
+    .cortes_periodo <- list(
+      ini = list(
+        id              = "ini",
+        data            = bd_ini,
+        mes             = mes_inicio,
+        etiqueta_modal  = "Inicio",
+        etiqueta_tabla  = "Inicio de Periodo",
+        etiqueta_footer = "corte inicial"
+      ),
+      vig = list(
+        id              = "vig",
+        data            = bd_vig,
+        mes             = mes_vigente,
+        etiqueta_modal  = "Mes Vigente",
+        etiqueta_tabla  = "Mes Vigente",
+        etiqueta_footer = "mes vigente"
+      )
+    )
+    
+    # Configuración de tipos de KPI (total / activo / inactivo / nuevo)
+    .tipos_kpi_periodo <- list(
+      total = list(
+        id              = "total",
+        estado          = NULL,
+        texto           = "Total UCs",
+        icono           = "users",
+        etiqueta_titulo = "Detalle",
+        footer_sufijo   = "unidades comerciales",
+        footer_tipo     = "info"
+      ),
+      activo = list(
+        id              = "activo",
+        estado          = "ACTIVO",
+        texto           = "Activos",
+        icono           = "check-circle",
+        etiqueta_titulo = "Activos",
+        footer_sufijo   = "UC(s) activas",
+        footer_tipo     = "info"
+      ),
+      inactivo = list(
+        id              = "inactivo",
+        estado          = "INACTIVO",
+        texto           = "A Recuperar",
+        icono           = "exclamation",
+        etiqueta_titulo = "A Recuperar",
+        footer_sufijo   = "UC(s) inactivas",
+        footer_tipo     = "warning"
+      ),
+      nuevo = list(
+        id              = "nuevo",
+        estado          = "NUEVO",
+        texto           = "Nuevos",
+        icono           = "star",
+        etiqueta_titulo = "Nuevos",
+        footer_sufijo   = "UC(s) nuevas",
+        footer_tipo     = "info"
+      )
+    )
+    
+    ### Labels de mes ----
+    output$lbl_mes_inicial <- renderUI({
+      tags$h6(
+        paste0("Mes Inicial \u2014 ", format(mes_inicio(), "%B %Y")),
+        style = "font-weight:700; color:#374151;"
+      )
+    })
+    output$lbl_mes_vigente <- renderUI({
+      tags$h6(
+        paste0("Mes Vigente \u2014 ", format(mes_vigente(), "%B %Y")),
+        style = "font-weight:700; color:#374151;"
+      )
+    })
+    
+    ### Registrar los 8 KPIs de periodo (2 cortes × 4 tipos) ----
+    for (corte in .cortes_periodo) {
+      for (tipo in .tipos_kpi_periodo) .kpi_periodo(corte, tipo)
+    }
+    
+    ### KPI — activos en riesgo de inactivarse este mes ----
+    racafeModulos::CajaModal(
+      "kpi_vig_en_riesgo",
+      valor           = n_en_riesgo,
+      formato         = "coma",
+      texto           = "En Riesgo",
+      icono           = "exclamation-triangle",
+      colores         = c(fondo = "white"),
+      mostrar_boton   = TRUE,
+      titulo_modal    = reactive(paste0(
+        "En Riesgo de Inactivarse \u2014 ", format(mes_vigente(), "%B %Y")
+      )),
+      icono_modal     = NULL,
+      tamano_modal    = "xl",
+      contenido_modal = function() TablaDetalleClientesUI(ns("tbl_mod_vig_en_riesgo")),
+      footer          = reactive(paste0(
+        n_en_riesgo(), " activos llegan al l\u00edmite de inactivaci\u00f3n este mes"
+      )),
+      footer_class    = "caja-modal-footer"
+    )
+    
+    TablaDetalleClientes(
+      id        = "tbl_mod_vig_en_riesgo",
+      data      = alertas_inactivar,
+      mes_vig   = mes_vigente,
+      titulo    = reactive(paste0(
+        "En Riesgo de Inactivarse \u2014 ", format(mes_vigente(), "%B %Y")
+      )),
+      subtitulo = "Activos cuya \u00faltima factura alcanza el umbral de inactivaci\u00f3n este mes",
+      footer    = reactive(paste0(
+        n_en_riesgo(), " UC(s) en riesgo de pasar a 'A Recuperar' este mes"
+      )),
+      footer_tipo = "warning"
+    )
+    
+    ### KPI — inactivos que facturaron este mes ----
+    racafeModulos::CajaModal(
+      "kpi_vig_por_recuperar",
+      valor           = n_recuperando,
+      formato         = "coma",
+      texto           = "Recuper\u00e1ndose",
+      icono           = "undo",
+      colores         = c(fondo = "white"),
+      mostrar_boton   = TRUE,
+      titulo_modal    = reactive(paste0(
+        "Inactivos que Facturaron \u2014 ", format(mes_vigente(), "%B %Y")
+      )),
+      icono_modal     = NULL,
+      tamano_modal    = "xl",
+      contenido_modal = function() TablaDetalleClientesUI(ns("tbl_mod_vig_por_recuperar")),
+      footer          = reactive(paste0(
+        n_recuperando(), " inactivos con factura en el mes \u2014 pr\u00f3ximos a reactivarse"
+      )),
+      footer_class    = "caja-modal-footer"
+    )
+    
+    TablaDetalleClientes(
+      id        = "tbl_mod_vig_por_recuperar",
+      data      = alertas_recuperados,
+      mes_vig   = mes_vigente,
+      titulo    = reactive(paste0(
+        "Inactivos que Facturaron \u2014 ", format(mes_vigente(), "%B %Y")
+      )),
+      subtitulo = "Inactivos con compra en el mes vigente \u2014 candidatos a reactivaci\u00f3n",
+      footer    = reactive(paste0(
+        n_recuperando(), " UC(s) inactivas con facturaci\u00f3n en el mes vigente"
+      )),
+      footer_tipo = "info"
+    )
+    
+    
+    ## Indicadores de Transición ----
+    
+    ### Modal de detalle de la matriz absoluta ----
+    # FIX YTD: data pasa el acumulado completo del panel para las UCs seleccionadas,
+    # y mes_vig apunta al mes vigente global (cierre del período de transición).
+    TablaDetalleClientes(
+      id        = "tbl_mod_matriz_total",
+      data      = reactive({
+        req(sel_matriz_estado(), trans_ucs())
+        ucs_sel <- trans_ucs() %>%
+          dplyr::filter(EstadoInicial == sel_matriz_estado()) %>%
+          dplyr::select(LinNegCod, CliNitPpal)
+        bd_f() %>%
+          dplyr::semi_join(ucs_sel, by = dplyr::join_by(LinNegCod, CliNitPpal))
+      }),
+      mes_vig   = mes_vigente,
+      titulo    = reactive(paste0(
+        "Detalle \u2014 Estado Inicial: ", sel_matriz_estado() %||% "", " \u2014 ",
+        format(mes_inicio(), "%b %Y"), " \u2192 ", format(mes_vigente(), "%b %Y")
+      )),
+      subtitulo = "Clientes cuyo estado inicial corresponde a la fila seleccionada",
+      footer    = reactive({
+        req(sel_matriz_estado(), trans_ucs())
+        n <- trans_ucs() %>%
+          dplyr::filter(EstadoInicial == sel_matriz_estado()) %>%
+          nrow()
+        paste0(n, " unidades comerciales con estado inicial '", sel_matriz_estado(), "'")
+      }),
+      footer_tipo = "info"
+    )
+    
+    ### Matriz absoluta — modo fila para habilitar modal ----
+    racafeModulos::TablaReactable2(
+      id   = "tbl_matriz_trans_abs",
+      data = reactive({
+        req(matriz_trans())
+        matriz_trans() %>% dplyr::rename(Estado = EstadoInicial)
+      }),
+      titulo    = "Transiciones",
+      subtitulo = reactive(paste0(
+        format(mes_inicio(), "%b %Y"), " \u2192 ", format(mes_vigente(), "%b %Y")
+      )),
+      footer = reactive({
+        ind <- indicadores_trans()
+        paste0(
+          "Retuvieron: ",       ind$aa, "<br/>",
+          "Se perdieron: ",     ind$ai, "<br/>",
+          "Se recuperaron: ",   ind$ia, "<br/>",
+          "Siguen inactivos: ", ind$ii
+        ) %>% HTML
+      }),
+      id_col     = "Estado",
+      col_specs  = list(
+        Estado   = reactable::colDef(
+          name     = "Estado Inicial",
+          minWidth = 130,
+          sticky   = "left",
+          style    = list(whiteSpace = "nowrap", fontWeight = "600")
+        ),
+        ACTIVO   = reactable::colDef(name = "Activo",   minWidth = 85,
+                                     style = list(whiteSpace = "nowrap")),
+        INACTIVO = reactable::colDef(name = "Inactivo", minWidth = 90,
+                                     style = list(whiteSpace = "nowrap")),
+        TOTAL    = reactable::colDef(name = "Total",    minWidth = 80,
+                                     style = list(fontWeight = "bold", whiteSpace = "nowrap"))
+      ),
+      modo_seleccion   = "fila",
+      filas_bloqueadas = as.character(length(.niveles_trans)),
+      searchable       = FALSE,
+      sortable         = FALSE,
+      page_size        = 10L,
+      modal_titulo_fn  = function(sel) paste0("Detalle \u2014 ", sel$id),
+      modal_pre_fn     = function(sel) sel_matriz_estado(as.character(sel$id)),
+      modal_contenido_fn = function(sel) TablaDetalleClientesUI(session$ns("tbl_mod_matriz_total")),
+      modal_size       = "xl"
+    )
+    
+    ### Matriz porcentual ----
+    racafeModulos::TablaReactable2(
+      id   = "tbl_matriz_trans",
+      data = reactive({
+        req(matriz_trans(), input$sel_tipo_matriz)
+        m     <- matriz_trans()
+        datos <- m %>% dplyr::filter(EstadoInicial != "TOTAL")
+        tot_g <- sum(datos$ACTIVO, na.rm = TRUE) + sum(datos$INACTIVO, na.rm = TRUE)
+        tot_a <- sum(datos$ACTIVO,   na.rm = TRUE)
+        tot_i <- sum(datos$INACTIVO, na.rm = TRUE)
+        
+        result <- switch(input$sel_tipo_matriz,
+                         pct_fila = m %>%
+                           dplyr::mutate(
+                             ACTIVO   = ifelse(TOTAL > 0, ACTIVO   / TOTAL, NA_real_),
+                             INACTIVO = ifelse(TOTAL > 0, INACTIVO / TOTAL, NA_real_),
+                             TOTAL    = ifelse(TOTAL > 0, 1,                NA_real_)
+                           ),
+                         pct_col = m %>%
+                           dplyr::mutate(
+                             ACTIVO   = if (tot_a > 0) ACTIVO   / tot_a else NA_real_,
+                             INACTIVO = if (tot_i > 0) INACTIVO / tot_i else NA_real_,
+                             TOTAL    = if (tot_g > 0) TOTAL    / tot_g else NA_real_
+                           ),
+                         pct_total = m %>%
+                           dplyr::mutate(
+                             ACTIVO   = if (tot_g > 0) ACTIVO   / tot_g else NA_real_,
+                             INACTIVO = if (tot_g > 0) INACTIVO / tot_g else NA_real_,
+                             TOTAL    = if (tot_g > 0) TOTAL    / tot_g else NA_real_
+                           )
+        )
+        result %>% dplyr::rename(Estado = EstadoInicial)
+      }),
+      titulo = reactive({
+        switch(input$sel_tipo_matriz,
+               pct_fila  = "Transiciones \u2014 % Fila (origen)",
+               pct_col   = "Transiciones \u2014 % Columna (destino)",
+               pct_total = "Transiciones \u2014 % Total general"
+        )
+      }),
+      subtitulo = reactive(paste0(
+        format(mes_inicio(), "%b %Y"), " \u2192 ", format(mes_vigente(), "%b %Y")
+      )),
+      footer = reactive({
+        ind <- indicadores_trans()
+        switch(input$sel_tipo_matriz,
+               pct_fila = paste0(
+                 "De cada 100 activos al inicio: ",
+                 round((ind$retencion %||% 0) * 100, 1), " siguen activos, ",
+                 round((ind$churn     %||% 0) * 100, 1), " se perdieron"
+               ) %>% HTML,
+               pct_col = paste0(
+                 "De cada 100 activos al cierre: ",
+                 round((ind$retencion %||% 0) * 100, 1), " ya eran activos antes"
+               ) %>% HTML,
+               pct_total = {
+                 total <- ind$aa + ind$ai + ind$ia + ind$ii
+                 v     <- if (total > 0) (ind$aa + ind$ii) / total else NA_real_
+                 paste0(
+                   round((v %||% 0) * 100, 1),
+                   "% del panel no cambi\u00f3 de estado en el periodo"
+                 ) %>% HTML
+               }
+        )
+      }),
+      id_col    = "Estado",
+      col_specs = list(
+        Estado   = reactable::colDef(
+          name     = "Estado Inicial",
+          minWidth = 130,
+          sticky   = "left",
+          style    = list(whiteSpace = "nowrap", fontWeight = "600")
+        ),
+        ACTIVO   = reactable::colDef(
+          name     = "Activo",
+          minWidth = 85,
+          cell     = function(v) if (is.na(v)) "\u2014" else .fmt_pct(v),
+          style    = list(whiteSpace = "nowrap")
+        ),
+        INACTIVO = reactable::colDef(
+          name     = "Inactivo",
+          minWidth = 90,
+          cell     = function(v) if (is.na(v)) "\u2014" else .fmt_pct(v),
+          style    = list(whiteSpace = "nowrap")
+        ),
+        TOTAL    = reactable::colDef(
+          name     = "Total",
+          minWidth = 80,
+          cell     = function(v) if (is.na(v)) "\u2014" else .fmt_pct(v),
+          style    = list(fontWeight = "bold", whiteSpace = "nowrap")
+        )
+      ),
+      modo_seleccion = "ninguno",
+      searchable     = FALSE,
+      sortable       = FALSE,
+      page_size      = 10L
+    )
+    
+    ### KPIs de tasa ----
+    racafeModulos::CajaModal(
+      "kpi_retencion",
+      valor = reactive({
+        v <- indicadores_trans()$retencion
+        racafeModulos::html_valor(v %||% 0, formato = "porcentaje",
+                                  color = .col_kpi(v, "retencion"))
+      }),
+      texto         = "Retenci\u00f3n Activos",
+      icono         = "check-double",
+      colores       = c(fondo = "white"),
+      mostrar_boton = FALSE,
+      footer        = reactive({
+        ind <- indicadores_trans()
+        paste0(
+          ind$aa, " clientes activos se mantuvieron<br/>",
+          "Activos al inicio: ", ind$activos_ini,
+          " \u2014 al cierre: ", ind$activos_fin
+        ) %>% HTML
+      }),
+      footer_class  = "caja-modal-footer"
+    )
+    
+    racafeModulos::CajaModal(
+      "kpi_churn",
+      valor = reactive({
+        v <- indicadores_trans()$churn
+        racafeModulos::html_valor(v %||% 0, formato = "porcentaje",
+                                  color = .col_kpi(v, "churn"))
+      }),
+      texto         = "P\u00e9rdida (Churn)",
+      icono         = "arrow-down",
+      colores       = c(fondo = "white"),
+      mostrar_boton = FALSE,
+      footer        = reactive({
+        ind      <- indicadores_trans()
+        neto_txt <- if (ind$cambio_neto >= 0) paste0("+", ind$cambio_neto)
+        else as.character(ind$cambio_neto)
+        paste0(
+          ind$ai, " clientes dejaron de comprar<br/>",
+          "Cambio neto de la base: ", neto_txt, " clientes"
+        ) %>% HTML
+      }),
+      footer_class  = "caja-modal-footer"
+    )
+    
+    racafeModulos::CajaModal(
+      "kpi_reactivacion",
+      valor = reactive({
+        v <- indicadores_trans()$reactivacion
+        racafeModulos::html_valor(v %||% 0, formato = "porcentaje",
+                                  color = .col_kpi(v, "reactivacion"))
+      }),
+      texto         = "Reactivaci\u00f3n",
+      icono         = "sync-alt",
+      colores       = c(fondo = "white"),
+      mostrar_boton = FALSE,
+      footer        = reactive({
+        ind <- indicadores_trans()
+        paste0(
+          ind$ia, " inactivos volvieron a comprar<br/>",
+          ind$ii, " permanecen sin facturar"
+        ) %>% HTML
+      }),
+      footer_class  = "caja-modal-footer"
+    )
+    
+    ### KPIs de volumen ----
+    racafeModulos::CajaModal(
+      "kpi_cambio_neto",
+      valor = reactive({
+        v     <- indicadores_trans()$cambio_neto
+        color <- if (is.na(v)) "#999999" else if (v >= 0) "#27AE60" else "#E74C3C"
+        racafeModulos::html_valor(v, formato = "coma", color = color)
+      }),
+      texto         = "Cambio Neto",
+      icono         = "exchange-alt",
+      colores       = c(fondo = "white"),
+      mostrar_boton = FALSE,
+      footer        = reactive({
+        ind      <- indicadores_trans()
+        tendencia <- if (ind$cambio_neto > 0) {
+          paste0("La base de activos creci\u00f3 en ", ind$cambio_neto, " clientes")
+        } else if (ind$cambio_neto < 0) {
+          paste0("La base de activos se redujo en ", abs(ind$cambio_neto), " clientes")
+        } else {
+          "La base no cambi\u00f3 de tama\u00f1o"
+        }
+        paste0(
+          ind$ia, " recuperados vs ", ind$ai, " perdidos<br/>",
+          tendencia
+        ) %>% HTML
+      }),
+      footer_class  = "caja-modal-footer"
+    )
+    
+    racafeModulos::CajaModal(
+      "kpi_estabilidad",
+      valor = reactive({
+        ind   <- indicadores_trans()
+        total <- ind$aa + ind$ai + ind$ia + ind$ii
+        v     <- dplyr::if_else(total > 0, (ind$aa + ind$ii) / total, NA_real_)
+        racafeModulos::html_valor(
+          v %||% 0, formato = "porcentaje",
+          color = if (is.na(v))       "#999999"
+          else if (v >= 0.75) "#27AE60"
+          else if (v >= 0.55) "#F4A820"
+          else                "#E74C3C"
+        )
+      }),
+      texto         = "Estabilidad",
+      icono         = "anchor",
+      colores       = c(fondo = "white"),
+      mostrar_boton = FALSE,
+      footer        = reactive({
+        ind   <- indicadores_trans()
+        total <- ind$aa + ind$ai + ind$ia + ind$ii
+        paste0(
+          ind$aa + ind$ii, " de ", total, " clientes no cambiaron de estado"
+        ) %>% HTML
+      }),
+      footer_class  = "caja-modal-footer"
+    )
+    
+    
+    ## Resumen mensual por estado ----
+    
+    ### KPIs de duración y dinámica (tasas mes a mes) ----
+    racafeModulos::CajaModal(
+      "kpi_vida_activo",
+      valor = reactive({
+        v <- indicadores_duracion()$t_vida_activo
+        racafeModulos::html_valor(
+          v %||% 0, formato = "coma",
+          color = if (is.na(v))     "#999999"
+          else if (v >= 6)  "#27AE60"
+          else if (v >= 3)  "#F4A820"
+          else              "#E74C3C"
+        )
+      }),
+      texto         = "Vida Media Activo (meses)",
+      icono         = "hourglass-half",
+      colores       = c(fondo = "white"),
+      mostrar_boton = FALSE,
+      footer        = reactive({
+        v <- indicadores_duracion()$t_vida_activo
+        if (is.na(v)) "Sin suficientes transiciones para calcular."
+        else paste0(
+          "Meses promedio que un cliente permanece activo antes de inactivarse"
+        ) %>% HTML
+      }),
+      footer_class  = "caja-modal-footer"
+    )
+    
+    racafeModulos::CajaModal(
+      "kpi_t_reactiv",
+      valor = reactive({
+        v <- indicadores_duracion()$t_reactiv
+        racafeModulos::html_valor(
+          v %||% 0, formato = "coma",
+          color = if (is.na(v))     "#999999"
+          else if (v <= 3)  "#27AE60"
+          else if (v <= 6)  "#F4A820"
+          else              "#E74C3C"
+        )
+      }),
+      texto         = "Tiempo de Reactivaci\u00f3n (meses)",
+      icono         = "clock",
+      colores       = c(fondo = "white"),
+      mostrar_boton = FALSE,
+      footer        = reactive({
+        v <- indicadores_duracion()$t_reactiv
+        if (is.na(v)) "Sin suficientes transiciones para calcular."
+        else paste0(
+          "Meses promedio que tarda un inactivo en volver a comprar.<br/>",
+          "<strong>Nota:</strong> los que nunca regresan no se cuentan,",
+          " lo que reduce el promedio observado."
+        ) %>% HTML
+      }),
+      footer_class  = "caja-modal-footer"
+    )
+    
+    racafeModulos::CajaModal(
+      "kpi_balance_neto",
+      valor = reactive({
+        v     <- indicadores_valor()$balance_neto
+        color <- if (is.na(v))   "#999999"
+        else if (v > 0)  "#27AE60"
+        else if (v == 0) "#F4A820"
+        else             "#E74C3C"
+        racafeModulos::html_valor(round(v %||% 0, 1), formato = "coma", color = color)
+      }),
+      texto         = "Balance Neto de Base",
+      icono         = "balance-scale",
+      colores       = c(fondo = "white"),
+      mostrar_boton = FALSE,
+      footer        = reactive({
+        val      <- indicadores_valor()
+        tendencia <- if (val$balance_neto > 0) "<strong>La base est\u00e1 creciendo.</strong>"
+        else if (val$balance_neto < 0) "<strong>La base est\u00e1 decreciendo.</strong>"
+        else "<strong>La base est\u00e1 estable.</strong>"
+        paste0(
+          tendencia, "<br/>",
+          "Recuperaciones esperadas vs p\u00e9rdidas esperadas por mes.<br/>",
+          "<strong>Nota:</strong> asume que las tasas mensuales",
+          " se mantienen constantes el pr\u00f3ximo mes."
+        ) %>% HTML
+      }),
+      footer_class  = "caja-modal-footer"
+    )
+    
+    ### KPIs de largo plazo y valor en riesgo ----
+    racafeModulos::CajaModal(
+      "kpi_pi_activo",
+      valor = reactive({
+        v <- estado_estacionario()$pi_a
+        racafeModulos::html_valor(
+          v %||% 0, formato = "porcentaje",
+          color = if (is.na(v))       "#999999"
+          else if (v >= 0.60) "#27AE60"
+          else if (v >= 0.40) "#F4A820"
+          else                "#E74C3C"
+        )
+      }),
+      texto         = "Activos en Largo Plazo",
+      icono         = "infinity",
+      colores       = c(fondo = "white"),
+      mostrar_boton = FALSE,
+      footer        = reactive({
+        ee <- estado_estacionario()
+        if (is.na(ee$pi_a)) "Sin suficientes transiciones para proyectar."
+        else paste0(
+          "Proporci\u00f3n a la que converge la base activa",
+          " si las tasas no cambian.<br/>",
+          "Distancia al equilibrio hoy: ", .fmt_pct(ee$distancia %||% 0), "<br/>",
+          "<strong>Nota:</strong> asume tasas constantes."
+        ) %>% HTML
+      }),
+      footer_class  = "caja-modal-footer"
+    )
+    
+    racafeModulos::CajaModal(
+      "kpi_pi_inactivo",
+      valor = reactive({
+        v <- estado_estacionario()$pi_i
+        racafeModulos::html_valor(
+          v %||% 0, formato = "porcentaje",
+          color = if (is.na(v))       "#999999"
+          else if (v <= 0.30) "#27AE60"
+          else if (v <= 0.50) "#F4A820"
+          else                "#E74C3C"
+        )
+      }),
+      texto         = "Inactivos en Largo Plazo",
+      icono         = "moon",
+      colores       = c(fondo = "white"),
+      mostrar_boton = FALSE,
+      footer        = reactive({
+        ee <- estado_estacionario()$pi_i
+        if (is.na(ee)) "Sin suficientes transiciones para proyectar."
+        else paste0(
+          "Proporci\u00f3n estructural de inactivos si las tasas no cambian"
+        ) %>% HTML
+      }),
+      footer_class  = "caja-modal-footer"
+    )
+    
+    racafeModulos::CajaModal(
+      "kpi_sacos_riesgo",
+      valor = reactive({
+        v <- indicadores_valor()$sacos_riesgo
+        racafeModulos::html_valor(
+          v %||% 0, formato = "coma",
+          color = if (is.na(v)) "#999999" else "#E74C3C"
+        )
+      }),
+      texto         = "Sacos en Riesgo",
+      icono         = "exclamation-triangle",
+      colores       = c(fondo = "white"),
+      mostrar_boton = FALSE,
+      footer        = reactive(
+        "Sacos mensuales en riesgo si el churn se mantiene" %>% HTML
+      ),
+      footer_class  = "caja-modal-footer"
+    )
+    
+    racafeModulos::CajaModal(
+      "kpi_rev_riesgo",
+      valor = reactive({
+        v <- indicadores_valor()$rev_riesgo
+        racafeModulos::html_valor(
+          v %||% 0, formato = "dinero",
+          color = if (is.na(v)) "#999999" else "#E74C3C"
+        )
+      }),
+      texto         = "Margen en Riesgo",
+      icono         = "dollar-sign",
+      colores       = c(fondo = "white"),
+      mostrar_boton = FALSE,
+      footer        = reactive(
+        "Margen mensual en riesgo si el churn se mantiene" %>% HTML
+      ),
+      footer_class  = "caja-modal-footer"
+    )
+    
+    ### Tabla resumen mensual con selección por celda ----
+    racafeModulos::TablaReactable2(
+      id        = "tbl_resumen_mensual",
+      data      = resumen_mensual,
+      titulo    = "Clientes por Estado y Mes",
+      subtitulo = paste0(
+        "Conteo de unidades comerciales \u00fanicas",
+        " \u2014 clic en una celda para ver el detalle"
+      ),
+      id_col    = "Estado",
+      col_specs = list(
+        Estado = reactable::colDef(
+          name     = "Estado",
+          minWidth = 140,
+          sticky   = "left",
+          style    = list(whiteSpace = "nowrap", fontWeight = "600")
+        )
+      ),
+      modo_seleccion   = "celda",
+      filas_bloqueadas = as.character(length(.niveles_resumen)),
+      searchable       = FALSE,
+      sortable         = FALSE,
+      page_size        = 10L,
+      modal_titulo_fn  = function(sel) paste0(sel$id, " \u2014 ", sel$col),
+      modal_contenido_fn = function(sel) {
+        sel_resumen$estado <- sel$id
+        sel_resumen$mes    <- sel$col
+        TablaDetalleClientesUI(ns("tbl_mod_resumen_celda"))
+      },
+      modal_size       = "xl"
+    )
+    
+    # Detalle de celda del resumen mensual.
+    # FIX YTD: data recibe el acumulado hasta la fecha seleccionada para las UCs
+    # en ese estado en ese mes, no solo el snapshot puntual del mes.
+    # Así Ej_SacosYTD ≠ Ej_SacosVig cuando la celda no es el primer mes.
+    TablaDetalleClientes(
+      id   = "tbl_mod_resumen_celda",
+      data = reactive({
+        req(sel_resumen$estado, sel_resumen$mes, mapa_mes_fecha())
+        fecha_sel <- mapa_mes_fecha()[[sel_resumen$mes]]
+        req(!is.null(fecha_sel))
+        # UCs en el estado seleccionado en el mes exacto
+        ucs_en_mes <- bd_f() %>%
+          dplyr::filter(FecProceso == fecha_sel, EstadoPanel == sel_resumen$estado) %>%
+          dplyr::select(LinNegCod, CliNitPpal)
+        # Acumulado YTD hasta fecha_sel para esas UCs
+        bd_f() %>%
+          dplyr::semi_join(ucs_en_mes, by = c("LinNegCod", "CliNitPpal")) %>%
+          dplyr::filter(FecProceso <= fecha_sel)
+      }),
+      mes_vig = reactive({
+        req(sel_resumen$mes, mapa_mes_fecha())
+        mapa_mes_fecha()[[sel_resumen$mes]]
+      }),
+      titulo    = reactive({
+        req(sel_resumen$estado, sel_resumen$mes)
+        paste0(sel_resumen$estado, " \u2014 ", sel_resumen$mes)
+      }),
+      subtitulo = "Detalle de unidades comerciales para la celda seleccionada",
+      footer    = reactive({
+        req(sel_resumen$estado, sel_resumen$mes, mapa_mes_fecha())
+        fecha_sel <- mapa_mes_fecha()[[sel_resumen$mes]]
+        n <- bd_f() %>%
+          dplyr::filter(FecProceso == fecha_sel, EstadoPanel == sel_resumen$estado) %>%
+          dplyr::summarise(n = dplyr::n_distinct(LinNegCod, CliNitPpal)) %>%
+          dplyr::pull(n)
+        paste0(n, " UC(s) en estado ", sel_resumen$estado, " \u2014 ", sel_resumen$mes)
+      }),
+      footer_tipo = "info"
+    )
+    
+    ### Gráfico de crecimiento ----
     output$plot_crecimiento <- plotly::renderPlotly({
       req(serie_crecimiento())
       df <- serie_crecimiento()
@@ -1374,9 +1665,17 @@ Cohortes <- function(id, bd, data_t) {
           hovertemplate = "<b>Nuevos</b><br>Mes: %{x|%b-%y}<br>Clientes: %{y:,}<extra></extra>"
         ) %>%
         plotly::layout(
-          title         = list(text = "Crecimiento poblacional — Activos, Inactivos y Nuevos", x = 0.02),
-          xaxis         = list(title = "", tickangle = -45, tickformat = "%b-%y", fixedrange = FALSE),
-          yaxis         = list(title = "Clientes únicos", tickformat = ","),
+          title         = list(
+            text = "Crecimiento poblacional \u2014 Activos, Inactivos y Nuevos",
+            x    = 0.02
+          ),
+          xaxis         = list(
+            title       = "",
+            tickangle   = -45,
+            tickformat  = "%b-%y",
+            fixedrange  = FALSE
+          ),
+          yaxis         = list(title = "Clientes \u00fanicos", tickformat = ","),
           legend        = list(orientation = "h", x = 0, y = -0.25),
           hovermode     = "x unified",
           margin        = list(l = 50, r = 20, t = 50, b = 80),
@@ -1386,7 +1685,6 @@ Cohortes <- function(id, bd, data_t) {
         plotly::config(displayModeBar = FALSE)
     })
     
-    
   })
 }
 
@@ -1394,13 +1692,17 @@ Cohortes <- function(id, bd, data_t) {
 # App de prueba ----
 options(OutDec = ",")
 ui <- bs4DashPage(
-  title = "Cohortes",
-  header = bs4DashNavbar(),
+  title   = "Cohortes",
+  header  = bs4DashNavbar(),
   sidebar = bs4DashSidebar(),
-  body = bs4DashBody(
-    includeCSS("https://raw.githubusercontent.com/HCamiloYateT/Compartido/refs/heads/main/Styles/style.css"),
+  body    = bs4DashBody(
+    includeCSS(paste0(
+      "https://raw.githubusercontent.com/HCamiloYateT/Compartido/",
+      "refs/heads/main/Styles/style.css"
+    )),
     useShinyjs(),
-    CohortesUI("cohortes"))
+    CohortesUI("cohortes")
+  )
 )
 server <- function(input, output, session) {
   Cohortes("cohortes", bd = reactive(BaseCohortes), data_t = reactive(BaseDatos_t))

@@ -356,10 +356,6 @@ lotes_raw <- cargar_lotes_incremental(datos_previos)
 # Facturacion: query completa garantiza un registro por lote (no particionar)
 fact <- cargar_fact()
 
-# Facturas historicas consolidadas por cliente (para indicadores globales)
-ConsultaSistema("syscafe", "select top 10 *  from FCTFACNA where FctNit = 37810621")
-
-
 FACT <- bind_rows(ConsultaSistema("syscafe",
                                    query = "SELECT F2.FctNit,
                                                    MIN(F2.FcnFec)          AS MinFecFact,
@@ -627,21 +623,21 @@ if (es_primer_dia) {
   rfm_m <- procesar_rfm(data, variable_revenue = "Margen",    tabla_destino = "CRMNALRFMM")
   
   # CLV ---
-  ana_dates_clv <- generar_fechas_analisis("2020-01-01", ajuste = -1L)
-  
-  if (length(ana_dates_clv) > 12L) {
-    future::plan(future::multisession, workers = parallel::detectCores() - 1L)
-    clv_results <- furrr::future_map_dfr(ana_dates_clv, procesar_clv, .progress = TRUE)
-    future::plan(future::sequential)
-  } else {
-    clv_results <- purrr::map_dfr(ana_dates_clv, procesar_clv)
-  }
-  EscribirDatos(clv_results, "CRMNALCLV")
-  
-  message("Segmentaciones completadas: ", Sys.time())
-  
-} else {
-  message("Segmentaciones omitidas (no es primer dia del mes): ", Sys.Date())
+#   ana_dates_clv <- generar_fechas_analisis("2020-01-01", ajuste = -1L)
+#   
+#   if (length(ana_dates_clv) > 12L) {
+#     future::plan(future::multisession, workers = parallel::detectCores() - 1L)
+#     clv_results <- furrr::future_map_dfr(ana_dates_clv, procesar_clv, .progress = TRUE)
+#     future::plan(future::sequential)
+#   } else {
+#     clv_results <- purrr::map_dfr(ana_dates_clv, procesar_clv)
+#   }
+#   EscribirDatos(clv_results, "CRMNALCLV")
+#   
+#   message("Segmentaciones completadas: ", Sys.time())
+#   
+# } else {
+#   message("Segmentaciones omitidas (no es primer dia del mes): ", Sys.Date())
 }
 
 
@@ -658,7 +654,7 @@ save.image("CRMNacional/data/data.RData")
 library(connectapi)
 
 client <- connect(server  = "http://172.16.19.39:3939",
-                  api_key = "HayDGkCmpQqmZB1rSkj2300JMDNpA2el")
+                  api_key = Sys.getenv("CONNECT_HCYT_KEY"))
 
 if (!file.exists("APP/manifest.json")) {
   rsconnect::writeManifest("/home/htamara/6_IndustriaNacional/CRM Cliente Nacional/CRMNacional/")
