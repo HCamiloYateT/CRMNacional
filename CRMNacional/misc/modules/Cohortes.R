@@ -259,6 +259,8 @@
   c(cols_id, comunes)
 }
 
+.na0 <- function(x) if (is.null(x) || is.na(x)) 0 else x
+
 
 # Modulo Tabla Detalle ----
 
@@ -355,9 +357,10 @@ CohortesUI <- function(id) {
   ns <- NS(id)
   tagList(
     
-    # Filtro global de presupuesto — gobierna todo el módulo ----
+    # Filtros globales del módulo: rango de meses + presupuesto — gobiernan todo el módulo ----
     tags$div(
-      style = "display:flex; justify-content:flex-end; margin-bottom:8px;",
+      style = "display:flex; justify-content:space-between; gap:14px; margin-bottom:8px; align-items:flex-end;",
+      uiOutput(ns("ui_fechas")),
       racafeShiny::BotonesRadiales(
         inputId        = ns("fil_ppto"),
         label          = "Presupuesto:",
@@ -365,9 +368,8 @@ CohortesUI <- function(id) {
         color_inactivo = "white",
         choices        = c("Total" = "todos", "Con Ppto" = "con", "Sin Ppto" = "sin"),
         selected       = "todos",
-        alineacion     = "right"
-      )
-    ),
+        alineacion     = "right")
+      ),
     
     # Bloque KPIs de periodo: inicio vs mes vigente ----
     bs4Dash::bs4Card(
@@ -511,6 +513,9 @@ Cohortes <- function(id, bd, data_t) {
     
     # Helpers internos ----
     
+    # Sustituye NULL o NA por un valor por defecto (a diferencia de %||%, que solo cubre NULL)
+    .na0 <- function(x) if (is.null(x) || is.na(x)) 0 else x
+    
     # Semáforo de color para KPIs de tasa
     .col_kpi <- function(v, tipo) {
       if (is.null(v) || is.na(v)) return("#999999")
@@ -542,14 +547,59 @@ Cohortes <- function(id, bd, data_t) {
     
     # Datos reactivos ----
     
-    # Fechas extremas del panel
-    mes_vigente <- reactive({
+    # Rango real de fechas disponibles en el panel — base para renderizar los selectores
+    rango_bd <- reactive({
       req(bd())
-      max(bd()$FecProceso, na.rm = TRUE)
+      list(
+        min = lubridate::floor_date(min(bd()$FecProceso, na.rm = TRUE), "month"),
+        max = lubridate::floor_date(max(bd()$FecProceso, na.rm = TRUE), "month")
+      )
+    })
+    
+    # Selectores de mes — se renderizan UNA vez con valor y límites ya resueltos,
+    # evitando el problema de timing de updateAirDateInput cuando se llaman dos
+    # actualizaciones en paralelo (fecha_ini terminaba igualada a fecha_fin).
+    output$ui_fechas <- renderUI({
+      req(rango_bd())
+      r <- rango_bd()
+      tags$div(
+        style = "display:flex; gap:12px; align-items:flex-end;",
+        tags$div(
+          style = "width:150px;",
+          racafeShiny::InputMes(
+            ns("fecha_ini"), label = "Mes inicial",
+            value = r$min, min_date = r$min, max_date = r$max
+          )
+        ),
+        tags$div(
+          style = "width:150px;",
+          racafeShiny::InputMes(
+            ns("fecha_fin"), label = "Mes final",
+            value = r$max, min_date = r$min, max_date = r$max
+          )
+        )
+      )
+    })
+    
+    # Guardarraíl — si el usuario cruza el rango, se autocorrige el mes final
+    # (aquí sí es seguro usar update*, porque solo se toca un input a la vez)
+    observeEvent(list(input$fecha_ini, input$fecha_fin), {
+      req(input$fecha_ini, input$fecha_fin)
+      if (as.Date(input$fecha_ini) > as.Date(input$fecha_fin)) {
+        shinyWidgets::updateAirDateInput(
+          session, "fecha_fin", value = as.Date(input$fecha_ini)
+        )
+      }
+    })
+    
+    # Mes vigente / mes inicial del panel — gobernados por el filtro de usuario
+    mes_vigente <- reactive({
+      req(input$fecha_fin)
+      lubridate::floor_date(as.Date(input$fecha_fin), "month")
     })
     mes_inicio <- reactive({
-      req(bd())
-      min(bd()$FecProceso, na.rm = TRUE)
+      req(input$fecha_ini)
+      lubridate::floor_date(as.Date(input$fecha_ini), "month")
     })
     
     # Universo de UCs activas según filtros dimensionales de data_t
@@ -560,11 +610,12 @@ Cohortes <- function(id, bd, data_t) {
         distinct()
     })
     
-    # bd filtrado al universo dimensional y al filtro global de presupuesto
+    # bd filtrado al universo dimensional, rango de meses y filtro global de presupuesto
     bd_f <- reactive({
-      req(bd(), ucs_activas())
+      req(bd(), ucs_activas(), mes_inicio(), mes_vigente())
       dat <- bd() %>%
-        semi_join(ucs_activas(), by = join_by(LinNegCod, CliNitPpal))
+        semi_join(ucs_activas(), by = join_by(LinNegCod, CliNitPpal)) %>%
+        filter(FecProceso >= mes_inicio(), FecProceso <= mes_vigente())
       if (identical(input$fil_ppto, "con")) {
         dat <- dplyr::filter(dat, Presupuestado == "PRESUPUESTADO")
       } else if (identical(input$fil_ppto, "sin")) {
@@ -753,9 +804,9 @@ Cohortes <- function(id, bd, data_t) {
     estado_estacionario <- reactive({
       req(indicadores_mensual())
       ind   <- indicadores_mensual()
-      denom <- (ind$churn %||% 0) + (ind$reactivacion %||% 0)
-      pi_a  <- if (!is.na(denom) && denom > 0) ind$reactivacion / denom else NA_real_
-      pi_i  <- if (!is.na(denom) && denom > 0) ind$churn        / denom else NA_real_
+      denom <- .na0(ind$churn) + .na0(ind$reactivacion)
+      pi_a  <- if (!is.na(denom) && denom > 0) .na0(ind$reactivacion) / denom else NA_real_
+      pi_i  <- if (!is.na(denom) && denom > 0) .na0(ind$churn)        / denom else NA_real_
       
       n_activos_act   <- .n_estado(bd_vig(), "ACTIVO")
       n_inactivos_act <- .n_estado(bd_vig(), "INACTIVO")
@@ -780,8 +831,7 @@ Cohortes <- function(id, bd, data_t) {
         sacos_prom   = sacos_prom,
         rev_riesgo   = if (!is.na(ind$churn)) n_activos_act * ind$churn * ticket_prom else NA_real_,
         sacos_riesgo = if (!is.na(ind$churn)) n_activos_act * ind$churn * sacos_prom  else NA_real_,
-        balance_neto = (ind$reactivacion %||% 0) * n_inactivos -
-          (ind$churn %||% 0) * n_activos_act,
+        balance_neto = .na0(ind$reactivacion) * n_inactivos - .na0(ind$churn) * n_activos_act,
         n_inactivos  = n_inactivos
       )
     })
@@ -1195,18 +1245,18 @@ Cohortes <- function(id, bd, data_t) {
         switch(input$sel_tipo_matriz,
                pct_fila = paste0(
                  "De cada 100 activos al inicio: ",
-                 round((ind$retencion %||% 0) * 100, 1), " siguen activos, ",
-                 round((ind$churn     %||% 0) * 100, 1), " se perdieron"
+                 round(.na0(ind$retencion) * 100, 1), " siguen activos, ",
+                 round(.na0(ind$churn)     * 100, 1), " se perdieron"
                ) %>% HTML,
                pct_col = paste0(
                  "De cada 100 activos al cierre: ",
-                 round((ind$retencion %||% 0) * 100, 1), " ya eran activos antes"
+                 round(.na0(ind$retencion) * 100, 1), " ya eran activos antes"
                ) %>% HTML,
                pct_total = {
                  total <- ind$aa + ind$ai + ind$ia + ind$ii
                  v     <- if (total > 0) (ind$aa + ind$ii) / total else NA_real_
                  paste0(
-                   round((v %||% 0) * 100, 1),
+                   round(.na0(v) * 100, 1),
                    "% del panel no cambi\u00f3 de estado en el periodo"
                  ) %>% HTML
                }
@@ -1250,7 +1300,7 @@ Cohortes <- function(id, bd, data_t) {
       "kpi_retencion",
       valor = reactive({
         v <- indicadores_trans()$retencion
-        racafeModulos::html_valor(v %||% 0, formato = "porcentaje",
+        racafeModulos::html_valor(.na0(v), formato = "porcentaje",
                                   color = .col_kpi(v, "retencion"))
       }),
       texto         = "Retenci\u00f3n Activos",
@@ -1272,7 +1322,7 @@ Cohortes <- function(id, bd, data_t) {
       "kpi_churn",
       valor = reactive({
         v <- indicadores_trans()$churn
-        racafeModulos::html_valor(v %||% 0, formato = "porcentaje",
+        racafeModulos::html_valor(.na0(v), formato = "porcentaje",
                                   color = .col_kpi(v, "churn"))
       }),
       texto         = "P\u00e9rdida (Churn)",
@@ -1280,13 +1330,17 @@ Cohortes <- function(id, bd, data_t) {
       colores       = c(fondo = "white"),
       mostrar_boton = FALSE,
       footer        = reactive({
-        ind      <- indicadores_trans()
-        neto_txt <- if (ind$cambio_neto >= 0) paste0("+", ind$cambio_neto)
-        else as.character(ind$cambio_neto)
-        paste0(
-          ind$ai, " clientes dejaron de comprar<br/>",
-          "Cambio neto de la base: ", neto_txt, " clientes"
-        ) %>% HTML
+        ind <- indicadores_trans()
+        if (is.na(ind$cambio_neto)) {
+          "Sin datos suficientes para calcular el cambio neto."
+        } else {
+          neto_txt <- if (ind$cambio_neto >= 0) paste0("+", ind$cambio_neto)
+          else as.character(ind$cambio_neto)
+          paste0(
+            ind$ai, " clientes dejaron de comprar<br/>",
+            "Cambio neto de la base: ", neto_txt, " clientes"
+          ) %>% HTML
+        }
       }),
       footer_class  = "caja-modal-footer"
     )
@@ -1295,7 +1349,7 @@ Cohortes <- function(id, bd, data_t) {
       "kpi_reactivacion",
       valor = reactive({
         v <- indicadores_trans()$reactivacion
-        racafeModulos::html_valor(v %||% 0, formato = "porcentaje",
+        racafeModulos::html_valor(.na0(v), formato = "porcentaje",
                                   color = .col_kpi(v, "reactivacion"))
       }),
       texto         = "Reactivaci\u00f3n",
@@ -1318,25 +1372,29 @@ Cohortes <- function(id, bd, data_t) {
       valor = reactive({
         v     <- indicadores_trans()$cambio_neto
         color <- if (is.na(v)) "#999999" else if (v >= 0) "#27AE60" else "#E74C3C"
-        racafeModulos::html_valor(v, formato = "coma", color = color)
+        racafeModulos::html_valor(.na0(v), formato = "coma", color = color)
       }),
       texto         = "Cambio Neto",
       icono         = "exchange-alt",
       colores       = c(fondo = "white"),
       mostrar_boton = FALSE,
       footer        = reactive({
-        ind      <- indicadores_trans()
-        tendencia <- if (ind$cambio_neto > 0) {
-          paste0("La base de activos creci\u00f3 en ", ind$cambio_neto, " clientes")
-        } else if (ind$cambio_neto < 0) {
-          paste0("La base de activos se redujo en ", abs(ind$cambio_neto), " clientes")
+        ind <- indicadores_trans()
+        if (is.na(ind$cambio_neto)) {
+          "Sin datos suficientes para calcular el cambio neto."
         } else {
-          "La base no cambi\u00f3 de tama\u00f1o"
+          tendencia <- if (ind$cambio_neto > 0) {
+            paste0("La base de activos creci\u00f3 en ", ind$cambio_neto, " clientes")
+          } else if (ind$cambio_neto < 0) {
+            paste0("La base de activos se redujo en ", abs(ind$cambio_neto), " clientes")
+          } else {
+            "La base no cambi\u00f3 de tama\u00f1o"
+          }
+          paste0(
+            ind$ia, " recuperados vs ", ind$ai, " perdidos<br/>",
+            tendencia
+          ) %>% HTML
         }
-        paste0(
-          ind$ia, " recuperados vs ", ind$ai, " perdidos<br/>",
-          tendencia
-        ) %>% HTML
       }),
       footer_class  = "caja-modal-footer"
     )
@@ -1348,7 +1406,7 @@ Cohortes <- function(id, bd, data_t) {
         total <- ind$aa + ind$ai + ind$ia + ind$ii
         v     <- dplyr::if_else(total > 0, (ind$aa + ind$ii) / total, NA_real_)
         racafeModulos::html_valor(
-          v %||% 0, formato = "porcentaje",
+          .na0(v), formato = "porcentaje",
           color = if (is.na(v))       "#999999"
           else if (v >= 0.75) "#27AE60"
           else if (v >= 0.55) "#F4A820"
@@ -1378,7 +1436,7 @@ Cohortes <- function(id, bd, data_t) {
       valor = reactive({
         v <- indicadores_duracion()$t_vida_activo
         racafeModulos::html_valor(
-          v %||% 0, formato = "coma",
+          .na0(v), formato = "coma",
           color = if (is.na(v))     "#999999"
           else if (v >= 6)  "#27AE60"
           else if (v >= 3)  "#F4A820"
@@ -1404,7 +1462,7 @@ Cohortes <- function(id, bd, data_t) {
       valor = reactive({
         v <- indicadores_duracion()$t_reactiv
         racafeModulos::html_valor(
-          v %||% 0, formato = "coma",
+          .na0(v), formato = "coma",
           color = if (is.na(v))     "#999999"
           else if (v <= 3)  "#27AE60"
           else if (v <= 6)  "#F4A820"
@@ -1435,23 +1493,27 @@ Cohortes <- function(id, bd, data_t) {
         else if (v > 0)  "#27AE60"
         else if (v == 0) "#F4A820"
         else             "#E74C3C"
-        racafeModulos::html_valor(round(v %||% 0, 1), formato = "coma", color = color)
+        racafeModulos::html_valor(round(.na0(v), 1), formato = "coma", color = color)
       }),
       texto         = "Balance Neto de Base",
       icono         = "balance-scale",
       colores       = c(fondo = "white"),
       mostrar_boton = FALSE,
       footer        = reactive({
-        val      <- indicadores_valor()
-        tendencia <- if (val$balance_neto > 0) "<strong>La base est\u00e1 creciendo.</strong>"
-        else if (val$balance_neto < 0) "<strong>La base est\u00e1 decreciendo.</strong>"
-        else "<strong>La base est\u00e1 estable.</strong>"
-        paste0(
-          tendencia, "<br/>",
-          "Recuperaciones esperadas vs p\u00e9rdidas esperadas por mes.<br/>",
-          "<strong>Nota:</strong> asume que las tasas mensuales",
-          " se mantienen constantes el pr\u00f3ximo mes."
-        ) %>% HTML
+        val <- indicadores_valor()
+        if (is.na(val$balance_neto)) {
+          "Sin suficientes transiciones para calcular el balance neto."
+        } else {
+          tendencia <- if (val$balance_neto > 0) "<strong>La base est\u00e1 creciendo.</strong>"
+          else if (val$balance_neto < 0) "<strong>La base est\u00e1 decreciendo.</strong>"
+          else "<strong>La base est\u00e1 estable.</strong>"
+          paste0(
+            tendencia, "<br/>",
+            "Recuperaciones esperadas vs p\u00e9rdidas esperadas por mes.<br/>",
+            "<strong>Nota:</strong> asume que las tasas mensuales",
+            " se mantienen constantes el pr\u00f3ximo mes."
+          ) %>% HTML
+        }
       }),
       footer_class  = "caja-modal-footer"
     )
@@ -1462,7 +1524,7 @@ Cohortes <- function(id, bd, data_t) {
       valor = reactive({
         v <- estado_estacionario()$pi_a
         racafeModulos::html_valor(
-          v %||% 0, formato = "porcentaje",
+          .na0(v), formato = "porcentaje",
           color = if (is.na(v))       "#999999"
           else if (v >= 0.60) "#27AE60"
           else if (v >= 0.40) "#F4A820"
@@ -1479,7 +1541,7 @@ Cohortes <- function(id, bd, data_t) {
         else paste0(
           "Proporci\u00f3n a la que converge la base activa",
           " si las tasas no cambian.<br/>",
-          "Distancia al equilibrio hoy: ", .fmt_pct(ee$distancia %||% 0), "<br/>",
+          "Distancia al equilibrio hoy: ", .fmt_pct(.na0(ee$distancia)), "<br/>",
           "<strong>Nota:</strong> asume tasas constantes."
         ) %>% HTML
       }),
@@ -1491,7 +1553,7 @@ Cohortes <- function(id, bd, data_t) {
       valor = reactive({
         v <- estado_estacionario()$pi_i
         racafeModulos::html_valor(
-          v %||% 0, formato = "porcentaje",
+          .na0(v), formato = "porcentaje",
           color = if (is.na(v))       "#999999"
           else if (v <= 0.30) "#27AE60"
           else if (v <= 0.50) "#F4A820"
@@ -1517,7 +1579,7 @@ Cohortes <- function(id, bd, data_t) {
       valor = reactive({
         v <- indicadores_valor()$sacos_riesgo
         racafeModulos::html_valor(
-          v %||% 0, formato = "coma",
+          .na0(v), formato = "coma",
           color = if (is.na(v)) "#999999" else "#E74C3C"
         )
       }),
@@ -1536,7 +1598,7 @@ Cohortes <- function(id, bd, data_t) {
       valor = reactive({
         v <- indicadores_valor()$rev_riesgo
         racafeModulos::html_valor(
-          v %||% 0, formato = "dinero",
+          .na0(v), formato = "dinero",
           color = if (is.na(v)) "#999999" else "#E74C3C"
         )
       }),
@@ -1687,8 +1749,6 @@ Cohortes <- function(id, bd, data_t) {
     
   })
 }
-
-
 # App de prueba ----
 options(OutDec = ",")
 ui <- bs4DashPage(
