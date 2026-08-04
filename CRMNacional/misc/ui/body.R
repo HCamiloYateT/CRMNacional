@@ -1,3 +1,18 @@
+# Cliente por pedido: CLCliNit combinado con su razón social
+choices_clcli_nit <- data %>%
+  distinct(CLCliNit, RazonSocialCliNit) %>%
+  filter(!is.na(CLCliNit), !is.na(RazonSocialCliNit)) %>%
+  arrange(RazonSocialCliNit) %>%
+  {setNames(as.character(.$CLCliNit), paste0(.$CLCliNit, " - ", .$RazonSocialCliNit))}
+
+# Cliente principal: CliNitPpal combinado con razón social y línea de negocio
+choices_clinit_ppal <- data %>%
+  distinct(CliNitPpal, PerRazSoc) %>%
+  filter(!is.na(CliNitPpal), !is.na(PerRazSoc)) %>%
+  arrange(PerRazSoc) %>%
+  {setNames(as.character(.$CliNitPpal),
+            paste0(.$CliNitPpal, " - ", .$PerRazSoc))}
+
 body <- bs4DashBody(
   includeCSS("https://raw.githubusercontent.com/HCamiloYateT/Compartido/refs/heads/main/Styles/style.css"),
   tags$script(HTML("// Solo aplicar a dropdowns con clase 'custom-dropdown-menu'
@@ -56,28 +71,43 @@ body <- bs4DashBody(
                                    RFMUI("RFMCliRecMargen"))
                           )
                ),
-    # Leads.
-    bs4TabItem(tabName = "LE_Listado", TablaModalCeldaUI("ResumenLeads")),
-    bs4TabItem(tabName = "LE_Embudo", SankeyTablaUI("Leads")),
+    # Embudo Comercial (Contacto → Lead → Cliente).
+    bs4TabItem(tabName = "EC_Kanban", KanbanEmbudoUI("EmbudoKanban")),
+    bs4TabItem(tabName = "EC_Contactos", TablaContactosUI("EmbudoContactos")),
+    bs4TabItem(tabName = "EC_Prospectos", TablaProspectosUI("EmbudoProspectos")),
+    bs4TabItem(tabName = "EC_Leads", TablaLeadsUI("EmbudoLeads")),
+    bs4TabItem(tabName = "EC_Descartados", TablaDescartadosUI("EmbudoDescartados")),
+    bs4TabItem(tabName = "EC_Embudo", EmbudoConversionUI("EmbudoConversion")),
     # Consulta Individual
     bs4TabItem(tabName = "IN_Consulta",
-               fluidRow(
-                 column(4,
-                        pickerInput("IND_Cliente",label = h6("Cliente"), width = "100%", 
-                                    choices = c("", Unicos(data$PerRazSoc)),  selected = NULL, multiple = F,
-                                    options = pick_opt(c("", Unicos(data$PerRazSoc))))
+               fluidRow(style = "display: flex; align-items: flex-end;",
+                        column(4,
+                               div(style = "min-height: 40px;", h6("Cliente Padre")),
+                               racafe::ListaDesplegable("IND_CliNitPpal", label = NULL,
+                                                        choices = choices_clinit_ppal, selected = NULL,
+                                                        multiple = FALSE)
+                               ),
+                        column(4,
+                               div(style = "min-height: 40px;", h6("Cliente Hijo")),
+                               racafe::ListaDesplegable("IND_CLCliNit", label = NULL,
+                                                        choices = choices_clcli_nit,
+                                                        multiple = TRUE)
+                               ),
+                        column(3,
+                               div(style = "min-height: 40px;", h6("L\u00ednea de Negocio")),
+                               racafe::ListaDesplegable("IND_LinNeg", label = NULL,
+                                                        choices = Unicos(data$CLLinNegNo),
+                                                        multiple = TRUE)
+                               ),
+                        column(1,
+                               div(style = "min-height: 40px;", h6("Limpiar")),
+                               actionButton("IND_Limpiar", label = NULL, icon = icon("eraser"),
+                                            class = "btn-danger", width = "100%")
+                               )
                         ),
-                 column(4,
-                        pickerInput("IND_LinNeg",label = h6("Línea de Negocio"), width = "100%", 
-                                    choices = c("",Unicos(data$CLLinNegNo)),  selected = NULL, multiple = F,
-                                    options = pick_opt(c("",Unicos(data$CLLinNegNo))))
-                 )
-               ),
                fluidRow(
-                 column(12, 
-                        IndividualUI("ConsultaIndivual"))
-               )
-               
+                 column(12, IndividualUI("ConsultaIndivual"))
+                 )
                )
     )
   )

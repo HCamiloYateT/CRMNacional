@@ -86,6 +86,9 @@ FiltrosUI <- function(id) {
 FiltrosServer <- function(id, usuario, productos_cache) {
   moduleServer(id, function(input, output, session) {
     
+    # Usuario con permiso para modificar el filtro de Asesor
+    .usuario_autorizado_asesor <- "JONATHAN CAÑON"
+    
     # Estado interno: almacena el snapshot de filtros vigente
     filtros_aplicados <- reactiveVal(NULL)
     
@@ -110,6 +113,12 @@ FiltrosServer <- function(id, usuario, productos_cache) {
     observeEvent(usuario(), ignoreNULL = FALSE, {
       req(usuario())
       updatePickerInput(session, "FT_Asesor", selected = usuario())
+      
+      if (usuario() == .usuario_autorizado_asesor) {
+        shinyjs::enable("FT_Asesor")
+      } else {
+        shinyjs::disable("FT_Asesor")
+      }
     })
     
     # Cascada: linea de negocio -> categoria y producto

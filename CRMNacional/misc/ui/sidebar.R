@@ -12,7 +12,7 @@ sidebar <- bs4DashSidebar(status = "danger", expandOnHover = FALSE,
                                                             bs4SidebarMenuSubItem("Registro", tabName = "OP_Registro", icon = icon("clipboard-list")),
                                                             bs4SidebarMenuSubItem("Listado", tabName = "OP_Listado", icon = icon("table")),
                                                             bs4SidebarMenuSubItem("Seguimiento", tabName = "OP_Seguimiento", icon = icon("chart-line"))
-                                                            ),
+                                         ),
                                          bs4SidebarMenuItem("Clientes", icon = icon("users"), 
                                                             bs4SidebarMenuSubItem("Resumen", tabName = "CL_Resumen", icon = icon("list")),
                                                             bs4SidebarMenuSubItem("Presupuesto", tabName = "CL_Presupuesto", icon = icon("file-invoice-dollar")),
@@ -24,9 +24,13 @@ sidebar <- bs4DashSidebar(status = "danger", expandOnHover = FALSE,
                                                             bs4SidebarMenuSubItem("Embudo", tabName = "CR_Embudo", icon = icon("funnel-dollar")),
                                                             bs4SidebarMenuSubItem("Segmentación RFM", tabName = "CR_RFM", icon = icon("layer-group"))
                                          ),
-                                         bs4SidebarMenuItem("Leads", icon = icon("bullseye"), 
-                                                            bs4SidebarMenuSubItem("Listado", tabName = "LE_Listado", icon = icon("list-ul")),
-                                                            bs4SidebarMenuSubItem("Embudo", tabName = "LE_Embudo", icon = icon("funnel-dollar"))
+                                         bs4SidebarMenuItem("Embudo Comercial", icon = icon("filter"), selected = FALSE,
+                                                            bs4SidebarMenuSubItem("Kanban", tabName = "EC_Kanban", icon = icon("columns")),
+                                                            bs4SidebarMenuSubItem("Contactos", tabName = "EC_Contactos", icon = icon("address-book")),
+                                                            bs4SidebarMenuSubItem("Prospectos", tabName = "EC_Prospectos", icon = icon("address-book")),
+                                                            bs4SidebarMenuSubItem("Leads", tabName = "EC_Leads", icon = icon("bullseye")),
+                                                            bs4SidebarMenuSubItem("Descartados", tabName = "EC_Descartados", icon = icon("ban")),
+                                                            bs4SidebarMenuSubItem("Embudo", tabName = "EC_Embudo", icon = icon("funnel-dollar"))
                                          ),
                                          bs4SidebarMenuItem("Consulta Individual", icon = icon("user"), tabName = "IN_Consulta")
                           )

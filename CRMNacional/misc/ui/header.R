@@ -13,8 +13,8 @@ header <- bs4DashNavbar(status = "white", border = FALSE, sidebarIcon = icon("ba
                                   racafeShiny::BotonDescarga("FT_DescargarClientes", icono = "users",
                                                              size = "xxs", title = "Descargar Clientes", color_fondo = "#6c757d", 
                                                              color_hover = "#DA291C")
-                                  )
-                          ),
+                          )
+                        ),
                         rightUi = tagList(MenuHeaderUI("MenuIndicadores", icon = shiny::icon("arrow-trend-up"),
                                                        min_width = "400px", title = "Indicadores"),
                                           MenuHeaderUI("MenuTareas", icon = shiny::icon("bars-progress"),
@@ -24,16 +24,21 @@ header <- bs4DashNavbar(status = "white", border = FALSE, sidebarIcon = icon("ba
                                             MenuHeaderUI("MenuClientes", icon = shiny::icon("users"),
                                                          min_width = "360px", title = "Clientes sin información"),
                                             id = "li_menu_clientes"
-                                            ),
+                                          ),
                                           htmltools::tagAppendAttributes(
                                             MenuHeaderUI("MenuClientesAnt", icon = shiny::icon("user-clock"),
                                                          min_width = "360px", title = "Clientes con Información antigüa"),
                                             id = "li_menu_clientes_ant"
+                                          ),
+                                          htmltools::tagAppendAttributes(
+                                            MenuHeaderUI("MenuMigrarCartera", icon = shiny::icon("people-arrows"),
+                                                         min_width = "360px", title = "Migrar Cartera"),
+                                            id = "li_menu_migrar_cartera"
                                             ),
                                           htmltools::tagAppendAttributes(
                                             MenuHeaderUI("MenuProductos", icon = shiny::icon("delicious"),
                                                          min_width = "360px", title = "Productos"),
                                             id = "li_menu_productos"
-                                            )
                                           )
                         )
+)

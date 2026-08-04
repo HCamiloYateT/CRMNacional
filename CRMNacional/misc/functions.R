@@ -1150,3 +1150,38 @@ createSwitch <- function(inputId, label, value = FALSE, ns) {
     width = "100%"
   )
 }
+
+# Otros
+imputar_cascada <- function(df, valor_col, niveles) {
+  for (grupo_vars in niveles) {
+    
+    # Nivel global (sin agrupar): promedio general como ultimo recurso
+    if (length(grupo_vars) == 0L) {
+      media_global <- mean(df[[valor_col]], na.rm = TRUE)
+      df[[valor_col]] <- ifelse(is.na(df[[valor_col]]), media_global, df[[valor_col]])
+      next
+    }
+    
+    # Promedio del valor en el nivel de agregacion actual (solo filas validas)
+    medias_nivel <- df %>%
+      filter(!is.na(.data[[valor_col]])) %>%
+      group_by(across(all_of(grupo_vars))) %>%
+      summarise(.media_tmp = mean(.data[[valor_col]], na.rm = TRUE), .groups = "drop")
+    
+    # Union por join: solo se completan los NA restantes en este nivel
+    df <- df %>%
+      left_join(medias_nivel, by = grupo_vars) %>%
+      mutate(across(all_of(valor_col), ~ ifelse(is.na(.), .media_tmp, .))) %>%
+      select(-.media_tmp)
+  }
+  df
+}
+niveles_margen <- list(
+  c("CLCliNit", "CLLinNegNo", "LinProCod", "MCCod", "MrcCod"),
+  c("CLLinNegNo", "LinProCod", "MCCod", "MrcCod"),
+  c("LinProCod", "MCCod", "MrcCod"),          # sin CLLinNegNo: producto exacto, cualquier linea
+  c("CLLinNegNo", "LinProCod"),
+  c("LinProCod"),                              # sin CLLinNegNo: categoria de producto sola
+  c("CLLinNegNo"),
+  character(0)                                 # promedio global: ultimo recurso
+)

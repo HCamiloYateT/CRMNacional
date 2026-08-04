@@ -1,5 +1,5 @@
 server <- function(input, output, session) {
-  
+
   # Helpers ----
   
   # Niveles estándar de segmento analítico RFM
@@ -12,18 +12,24 @@ server <- function(input, output, session) {
   # Columnas de facturación de datos_rv() que se reemplazan con fuente viva
   .cols_fact_stale <- c("FecFact", "KilosFact", "SacosFact", "SacFact70",
                         "Margen", "SacosPYG", "Facturado", "MarKilo"
-                        )
+  )
   
-  # Factory de cache con invalidación, actualización manual y TTL opcional en minutos
+  # Factory de cache con invalidación, actualización manual y TTL opcional en
+  # minutos. Solo la DECISIÓN de refrescar se aísla (evita que la propia
+  # lectura de control cree un ciclo); la lectura final de data_cache() ya NO
+  # se aísla, por lo que cualquier reactive({}) que llame a $get() SÍ queda
+  # correctamente suscrito y se re-ejecuta cuando $refresh() o el TTL
+  # actualizan el valor cacheado.
   create_cache <- function(loader_fn, process_fn = NULL, ttl_mins = NULL) {
     data_cache  <- reactiveVal(NULL)
     last_update <- reactiveVal(Sys.time())
     get_data <- function() {
-      cached      <- isolate(data_cache())
-      tiempo_mins <- difftime(Sys.time(), isolate(last_update()), units = "mins")
-      needs_refresh <- is.null(cached) ||
-        (!is.null(ttl_mins) && tiempo_mins > ttl_mins)
-      if (needs_refresh) {
+      necesita_refresco <- isolate({
+        cached      <- data_cache()
+        tiempo_mins <- difftime(Sys.time(), last_update(), units = "mins")
+        is.null(cached) || (!is.null(ttl_mins) && tiempo_mins > ttl_mins)
+      })
+      if (necesita_refresco) {
         tryCatch(
           {
             raw    <- loader_fn()
@@ -37,7 +43,9 @@ server <- function(input, output, session) {
           }
         )
       }
-      isolate(data_cache())
+      # Lectura NO aislada: registra la dependencia reactiva para quien
+      # llame a $get() desde dentro de un reactive({}) o render*({}).
+      data_cache()
     }
     list(
       get         = get_data,
@@ -70,6 +78,128 @@ server <- function(input, output, session) {
       rename_with(~ paste0(.x, suffix), all_of(cols_rfm))
   }
   
+  # Sección de etiqueta para el resumen de cliente (modal)
+  .seccion <- function(label) {
+    tags$p(
+      style = paste0(
+        "font-size:10px; font-weight:700; color:#94A3B8; ",
+        "text-transform:uppercase; letter-spacing:0.05em; margin:0 0 6px;"
+      ),
+      label
+    )
+  }
+  
+  # Fila icono + etiqueta + valor para el resumen de cliente (modal)
+  .item <- function(icono, label, valor) {
+    tags$div(
+      style = "display:flex; align-items:flex-start; gap:6px; margin-bottom:4px;",
+      tags$span(icon(icono), style = "color:#64748B; font-size:10px; width:13px; margin-top:1px;"),
+      tags$span(label, style = "font-size:11px; color:#64748B; min-width:90px; flex-shrink:0;"),
+      tags$span(valor, style = "font-size:11px; font-weight:600; color:#374151;")
+    )
+  }
+  
+  # Resumen de cliente compartido por los modales "sin información" e
+  # "información antigua". mostrar_ult_proceso agrega la fila de última
+  # actualización CRM, usada únicamente en el segundo caso.
+  .renderizar_resumen_cliente <- function(id_val, dat_cli_all, crm_all,
+                                          mostrar_ult_proceso = FALSE) {
+    req(!is.null(id_val), length(id_val$nit) == 1L, !is.na(id_val$nit))
+    
+    crm <- crm_all %>%
+      dplyr::filter(CliNitPpal == id_val$nit, LinNegCod == id_val$linneg_cod) %>%
+      dplyr::arrange(dplyr::desc(FecProceso)) %>%
+      dplyr::slice(1)
+    
+    dat_cli <- dat_cli_all %>%
+      dplyr::filter(CliNitPpal == id_val$nit, LinNegCod == id_val$linneg_cod)
+    
+    cod_ultimo <- dat_cli %>%
+      dplyr::arrange(dplyr::desc(PdcFecCre)) %>%
+      dplyr::pull(CLPdcCod) %>%
+      dplyr::first()
+    
+    ultimo <- dat_cli %>% dplyr::filter(CLPdcCod == cod_ultimo)
+    
+    segmento    <- if (nrow(crm) > 0 && nzchar(crm$Segmento[1] %||% "")) crm$Segmento[1] else "—"
+    asesor      <- if (nrow(crm) > 0 && nzchar(crm$Asesor[1]   %||% "")) crm$Asesor[1]   else "—"
+    ult_proceso <- if (nrow(crm) > 0) format(crm$FecProceso[1], "%d %b %Y") else "—"
+    ultima_fac  <- tryCatch({
+      m <- max(dat_cli$FecFact, na.rm = TRUE)
+      if (is.infinite(m)) "—" else format(m, "%d %b %Y")
+    }, error = function(e) "—")
+    
+    if (nrow(ultimo) > 0) {
+      cod_pedido <- as.character(cod_ultimo %||% "—")
+      fec_pedido <- tryCatch(
+        format(as.Date(ultimo$PdcFecCre[1]), "%d %b %Y"), error = function(e) "—"
+      )
+      usr_pedido <- ultimo$Usuario[1] %||% "—"
+      sacos_tot  <- format(sum(ultimo$SacLote, na.rm = TRUE), big.mark = ".", decimal.mark = ",")
+    } else {
+      cod_pedido <- fec_pedido <- usr_pedido <- sacos_tot <- "—"
+    }
+    
+    lotes_ui <- if (nrow(ultimo) > 0) {
+      items <- lapply(seq_len(nrow(ultimo)), function(i) {
+        f <- ultimo[i, ]
+        tags$div(
+          style = paste0(
+            "background:white; border:1px solid #E2E8F0; border-radius:4px;",
+            "padding:5px 8px; margin-bottom:4px;"
+          ),
+          tags$div(
+            style = "display:flex; justify-content:space-between; align-items:center;",
+            tags$div(
+              tags$span(
+                as.character(f$CLLotCod),
+                style = "font-size:11px; font-weight:700; color:#1E40AF;"
+              ),
+              tags$span(
+                paste0(" · ", f$Categoria %||% "—", " / ", f$Producto %||% "—"),
+                style = "font-size:10px; color:#64748B;"
+              )
+            ),
+            tags$span(
+              paste0(format(f$SacLote, big.mark = ".", decimal.mark = ","), " sacos"),
+              style = "font-size:11px; font-weight:600; color:#374151;"
+            )
+          )
+        )
+      })
+      do.call(tagList, items)
+    } else {
+      tags$span("—", style = "font-size:11px; color:#94A3B8;")
+    }
+    
+    tags$div(
+      style = paste0(
+        "background:#F8FAFC; border:1px solid #E2E8F0; border-radius:6px;",
+        "padding:12px 14px; margin-bottom:14px;"
+      ),
+      fluidRow(
+        column(4,
+               .seccion("Datos CRM"),
+               if (mostrar_ult_proceso) .item("clock", "Últ. actualiz.:", ult_proceso),
+               .item("calendar",    "Última factura:", ultima_fac),
+               .item("layer-group", "Segmento:",       segmento),
+               .item("user",        "Asesor:",          asesor)
+        ),
+        column(4,
+               .seccion("Último pedido"),
+               .item("hashtag",        "Código:",     cod_pedido),
+               .item("calendar-plus",  "Creación:",   fec_pedido),
+               .item("user-pen",       "Usuario:",    usr_pedido),
+               .item("weight-hanging", "Sacos tot.:", sacos_tot)
+        ),
+        column(4,
+               .seccion(paste0("Lotes (", nrow(ultimo), ")")),
+               lotes_ui
+        )
+      )
+    )
+  }
+  
   # Join temporal de CRMNALCLIENTE según modo DINÁMICO o ESTÁTICO
   # Preserva todas las filas de dat_fact independientemente del match en clientes
   .join_clientes <- function(dat_fact, clientes_raw, modo, cols_select) {
@@ -78,32 +208,36 @@ server <- function(input, output, session) {
     
     if (modo == "DINÁMICO") {
       snap <- clientes_sel %>%
-        group_by(LinNegCod, CliNitPpal) %>%
-        filter(FecProceso == max(FecProceso)) %>%
-        slice(1) %>%
-        ungroup() %>%
+        .snapshot_max(LinNegCod, CliNitPpal) %>%
         select(-FecProceso)
       return(left_join(dat_fact, snap, by = c("CliNitPpal", "LinNegCod")))
     }
     
-    # ESTÁTICO: FecProceso más reciente <= FecFact; filas sin match se conservan con NA
+    # ESTÁTICO: para cada fila se busca el snapshot con FecProceso más
+    # reciente que sea <= FecFact (join "rolling"/asof, dplyr >= 1.1). Si
+    # FecFact es NA se usa el snapshot más reciente disponible (mismo
+    # comportamiento que el modo DINÁMICO para esa fila). Se evita la
+    # expansión many-to-many + filtro posterior de la versión anterior: el
+    # join rolling resuelve el emparejamiento en una sola pasada, sin
+    # materializar filas intermedias por cada snapshot histórico del cliente.
     dat_con_id <- dat_fact %>% mutate(.row_id = row_number())
     
-    snap_validos <- dat_con_id %>%
+    con_fecha <- dat_con_id %>% filter(!is.na(FecFact))
+    sin_fecha <- dat_con_id %>% filter(is.na(FecFact))
+    
+    snap_con_fecha <- con_fecha %>%
       left_join(
-        clientes_sel, by = c("CliNitPpal", "LinNegCod"),
-        relationship = "many-to-many"
-      ) %>%
-      filter(is.na(FecFact) | FecProceso <= as.Date(FecFact)) %>%
-      group_by(.row_id) %>%
-      filter(FecProceso == max(FecProceso, na.rm = TRUE)) %>%
-      slice(1) %>%
-      ungroup()
+        clientes_sel,
+        by = join_by(CliNitPpal, LinNegCod, closest(FecFact >= FecProceso))
+      )
     
-    sin_snap <- dat_con_id %>%
-      filter(!.row_id %in% snap_validos$.row_id)
+    snap_sin_fecha <- sin_fecha %>%
+      left_join(
+        clientes_sel %>% .snapshot_max(LinNegCod, CliNitPpal),
+        by = c("CliNitPpal", "LinNegCod")
+      )
     
-    bind_rows(snap_validos, sin_snap) %>%
+    bind_rows(snap_con_fecha, snap_sin_fecha) %>%
       arrange(.row_id) %>%
       select(-.row_id, -FecProceso)
   }
@@ -154,7 +288,7 @@ server <- function(input, output, session) {
   ## Clientes en bruto desde CRMNALCLIENTE (fuente única para todos los consumidores)
   clientes_raw_cache <- create_cache(loader_fn = function() {
     CargarDatos("CRMNALCLIENTE") %>%
-      mutate(FecProceso = as.Date(FecProceso),
+      mutate(FecProceso = as_datetime(FecProceso),
              across(where(is.numeric),   ~ ifelse(is.na(.), 0, .)),
              across(where(is.character), ~ ifelse(is.na(.) | . == "N/A", "", .))) %>%
       left_join(CargarDatos("CRMNALLOCAL") %>%
@@ -213,10 +347,7 @@ server <- function(input, output, session) {
     process_fn = function(dat) {
       dat %>%
         mutate(FecProceso = as.Date(FecProceso), CliNitPpal = as.numeric(CliNitPpal)) %>%
-        group_by(CliNitPpal) %>%
-        filter(FecProceso == max(FecProceso)) %>%
-        slice(1) %>%
-        ungroup() %>%
+        .snapshot_max(CliNitPpal) %>%
         select(CliNitPpal, Churn, SacosPred)
     }
   )
@@ -227,10 +358,7 @@ server <- function(input, output, session) {
     process_fn = function(dat) {
       dat %>%
         mutate(FecProceso = as.Date(FecProceso)) %>%
-        group_by(LinNegCod, LinProCod, MCCod, MrcCod) %>%
-        filter(FecProceso == max(FecProceso)) %>%
-        slice(1) %>%
-        ungroup()
+        .snapshot_max(LinNegCod, LinProCod, MCCod, MrcCod)
     }
   )
   
@@ -405,7 +533,14 @@ server <- function(input, output, session) {
   ## Notas y Tareas ----
   # reactiveVal: los módulos TaskCreation y noteDisplay escriben vía notes_data(nuevo)
   # La carga inicial viene del cache; FT_Actualizar sincroniza tras el refresh completo
-  notes_data <- reactiveVal(notas_cache$get())
+  # isolate(): esta línea corre en la inicialización de la sesión, FUERA de
+  # cualquier consumidor reactivo (reactive/observe/render). Como $get() ya no
+  # aísla su lectura final (fix de create_cache), aquí SÍ hace falta aislar
+  # explícitamente para evitar "Operation not allowed without an active
+  # reactive context". Las actualizaciones posteriores de notas ocurren
+  # dentro de contextos reactivos válidos (ver FT_Actualizar más abajo), así
+  # que no pierden la propagación automática.
+  notes_data <- reactiveVal(isolate(notas_cache$get()))
   
   ## Clientes en bruto: snapshots derivados del cache centralizado ----
   clientes_raw <- reactive({ clientes_raw_cache$get() })
@@ -433,30 +568,23 @@ server <- function(input, output, session) {
   
   ## Lotes enriquecidos: reactivo pesado, invalida solo con cambios de datos base ----
   data_lotes_enriquecidos <- reactive({
-      tt <- datos_rv() %>%
-        select(-any_of(.cols_fact_stale)) %>%
-        left_join(pend_cache$get(), by = c("CLSucCod", "CLLotCod")) %>%
-        left_join(
-          # Renombrar para mantener convención DataPrep: FecFact = primera factura
-          fact_cache$get() %>% rename(FecFact = FecPrimerFact, FecUltFact = FecFact),
-          by = "CLLotCod"
-        ) %>%
-      # Imputación jerárquica de margen por kilo (4 niveles), idéntica a DataPrep
+    datos_rv() %>%
+      select(-any_of(.cols_fact_stale)) %>%
+      left_join(pend_cache$get(), by = c("CLSucCod", "CLLotCod")) %>%
+      left_join(
+        # Renombrar para mantener convención DataPrep: FecFact = primera factura
+        fact_cache$get() %>% rename(FecFact = FecPrimerFact, FecUltFact = FecFact),
+        by = "CLLotCod"
+      ) %>%
       mutate(MarKilo = Margen / KilosFact) %>%
-      group_by(CLCliNit, CLLinNegNo, LinProCod, MCCod, MrcCod) %>%
-      mutate(MarKilo = ifelse(is.na(MarKilo), mean(MarKilo, na.rm = TRUE), MarKilo)) %>%
-      group_by(CLLinNegNo, LinProCod, MCCod, MrcCod) %>%
-      mutate(MarKilo = ifelse(is.na(MarKilo), mean(MarKilo, na.rm = TRUE), MarKilo)) %>%
-      group_by(CLLinNegNo, LinProCod) %>%
-      mutate(MarKilo = ifelse(is.na(MarKilo), mean(MarKilo, na.rm = TRUE), MarKilo)) %>%
-      group_by(CLLinNegNo) %>%
-      mutate(MarKilo = ifelse(is.na(MarKilo), mean(MarKilo, na.rm = TRUE), MarKilo)) %>%
-      ungroup() %>%
-      mutate(SacosPYG = ifelse(is.na(SacosPYG), SacFact70, SacosPYG),
-             Margen = ifelse(is.na(Margen),
-                             MarKilo * (SacosPYG * 70),
-                             Margen),
-             PendProducir  = SacLote - coalesce(CLLotSacPr, 0),
+      # Imputación jerárquica de margen por kilo: MISMA cascada de 7 niveles
+      # que DataPrep.R (imputar_cascada() + niveles_margen, provistas por
+      # misc/functions.R vía load_modules() en global.R).
+      imputar_cascada(valor_col = "MarKilo", niveles = niveles_margen) %>%
+      mutate(
+        SacosPYG = ifelse(is.na(SacosPYG), SacFact70, SacosPYG),
+        Margen   = ifelse(is.na(Margen), MarKilo * (SacosPYG * 70), Margen),
+        PendProducir  = SacLote - coalesce(CLLotSacPr, 0),
         PendDespachar = pmax(SacLote - pmax(coalesce(CLLotSacDe, 0), 0), 0),
         PendFacturar  = SacLote - pmax(PendDespachar, 0) - coalesce(CLLotSacFa, 0),
         # Patch: FCTFACN1 ya registró la factura pero EXPCUALO aún no refleja el cambio
@@ -479,7 +607,7 @@ server <- function(input, output, session) {
         by = c("LinNegCod", "LinProCod", "MCCod", "MrcCod")
       )
   })
-  observeEvent(data_lotes_enriquecidos(), { assign("BaseDatos_e", data_lotes_enriquecidos(), envir = .GlobalEnv) }) #[DEBUG] 
+  observeEvent(data_lotes_enriquecidos(), { assign("BaseDatos_e", data_lotes_enriquecidos(), envir = .GlobalEnv) }) #[DEBUG]
   
   ## data_c: enriquecimiento por cliente y periodo ----
   # Sin preloader: reactivo intermedio; el waiter pertenece únicamente a data_f()
@@ -513,7 +641,7 @@ server <- function(input, output, session) {
         Producto   = ifelse(is.na(Producto)   | Producto   == "", "SIN DATO", Producto)
       )
   })
-  observeEvent(data_c(), { assign("BaseDatos_c", data_c(), envir = .GlobalEnv) }) #[DEBUG] 
+  observeEvent(data_c(), { assign("BaseDatos_c", data_c(), envir = .GlobalEnv) }) #[DEBUG]
   
   ## data_t: filtro por dimensiones de negocio ----
   # Sin preloader: filter() puro sobre data_c() ya en memoria
@@ -594,7 +722,7 @@ server <- function(input, output, session) {
       mutate(EstadoPanel = max(ifelse(Estado == "NUEVO", 1, 0)),
              FecIngreso  = if (any(Estado == "NUEVO")) {min(FecProceso[Estado == "NUEVO"])} else {as.Date(paste0(anio, "-01-01"))},
              EdadPanel   = lubridate::interval(FecIngreso, FecProceso) %/% months(1) + 1
-             ) %>%
+      ) %>%
       ungroup() %>%
       mutate(EstadoPanel = ifelse(EstadoPanel == 1, "NUEVO", Estado)) %>%
       left_join(t2, by = join_by(LinNegCod, CliNitPpal)) %>%
@@ -659,7 +787,7 @@ server <- function(input, output, session) {
              LinNegCod  %in% linneg_cod_activos,
              Segmento   %in% f$segmento,
              Asesor     %in% f$asesor
-             )
+      )
   })
   observeEvent(data_leads_f(), { assign("BaseLeads", data_leads_f(), envir = .GlobalEnv) }) # [DEBUG] 
   
@@ -701,13 +829,29 @@ server <- function(input, output, session) {
   observeEvent(data_competencia_f(), { assign("BaseCompetencia", data_competencia_f(), envir = .GlobalEnv) }) # [DEBUG] 
   
   ## Consulta individual ----
+  
+  di_lookup <- reactive({
+    data_c() %>%
+      dplyr::distinct(CLCliNit, CliNitPpal) %>%
+      dplyr::filter(!is.na(CLCliNit), !is.na(CliNitPpal))
+  })
   data_individual <- reactive({
     waiter_show(html = preloader_actualizar$html, color = preloader_actualizar$color)
     on.exit(waiter_hide())
-    req(input$IND_Cliente, input$IND_LinNeg)
-    data_c() %>% filter(PerRazSoc == input$IND_Cliente, CLLinNegNo == input$IND_LinNeg)
+    req(input$IND_CliNitPpal, input$IND_LinNeg)
+    
+    df <- data_c() %>%
+      filter(as.character(CliNitPpal) == input$IND_CliNitPpal, CLLinNegNo == input$IND_LinNeg)
+    
+    # Filtro opcional por hijos: si el usuario redujo la selección múltiple
+    # (no dejó todos marcados), acota a esos CLCliNit puntuales.
+    if (length(input$IND_CLCliNit) > 0) {
+      df <- df %>% filter(as.character(CLCliNit) %in% input$IND_CLCliNit)
+    }
+    
+    df
   })
-  # [DEBUG] observeEvent(data_individual(), { assign("BaseDatos_i", data_individual(), envir = .GlobalEnv) })
+  observeEvent(data_individual(), { assign("BaseDatos_i", data_individual(), envir = .GlobalEnv) })
   
   # Actualización Manual ----
   # walk(all_caches) invalida y recarga todos los caches en secuencia, incluyendo
@@ -746,8 +890,10 @@ server <- function(input, output, session) {
   output$FT_DescargarClientes <- downloadHandler(
     filename = function() paste0("Clientes_", Sys.Date(), ".xlsx"),
     content  = function(file) {
-      # Snapshot más reciente por cliente y línea desde cache centralizado
-      snap <- clientes_raw_cache$get() %>%
+      # Snapshot más reciente por cliente y línea desde cache centralizado.
+      # isolate(): acción de un solo disparo (descarga bajo demanda); no debe
+      # quedar suscrita a futuras invalidaciones del cache.
+      snap <- isolate(clientes_raw_cache$get()) %>%
         .snapshot_max(LinNegCod, CLCliNit)
       
       # Razón social desde NCLIENTE: join por CLCliNit = PerCod
@@ -812,11 +958,14 @@ server <- function(input, output, session) {
     if (es_admin) {
       shinyjs::show("li_menu_clientes")
       shinyjs::show("li_menu_clientes_ant")
+      shinyjs::show("li_menu_migrar_cartera")
       shinyjs::show("li_menu_productos")
     } else {
       shinyjs::hide("li_menu_clientes")
       shinyjs::hide("li_menu_clientes_ant")
+      shinyjs::hide("li_menu_migrar_cartera")
       shinyjs::hide("li_menu_productos")
+      
     }
   })
   ### Clientes sin información ----
@@ -836,7 +985,7 @@ server <- function(input, output, session) {
       dplyr::distinct(CliNitPpal, LinNegCod, PerRazSoc, CLLinNegNo) %>%
       dplyr::anti_join(crm, by = c("CliNitPpal", "LinNegCod")) %>%
       dplyr::arrange(PerRazSoc) %>%
-      dplyr::mutate(label = paste0(CLLinNegNo, " \u2014 ", PerRazSoc)) %>%
+      dplyr::mutate(label = paste0(CLLinNegNo, " — ", PerRazSoc)) %>%
       dplyr::arrange(label)
   })
   # IndFormulario registrado una sola vez con identidad dinámica
@@ -848,122 +997,15 @@ server <- function(input, output, session) {
                   req(!is.null(id_val), length(id_val$nit) == 1L, !is.na(id_val$nit))
                   data_c() %>%
                     dplyr::filter(CliNitPpal == id_val$nit, LinNegCod == id_val$linneg_cod)
-                  }),
+                }),
                 usr = usuario)
   
-  # Resumen de datos del modal de cliente
+  # Resumen de datos del modal de cliente (sin información)
   output$resumen_cli_modal <- renderUI({
-    id_val <- cli_identidad_rv()
-    req(!is.null(id_val), length(id_val$nit) == 1L, !is.na(id_val$nit))
-    
-    crm <- clientes_raw_cache$get() %>%
-      dplyr::filter(CliNitPpal == id_val$nit, LinNegCod == id_val$linneg_cod) %>%
-      dplyr::arrange(dplyr::desc(FecProceso)) %>%
-      dplyr::slice(1)
-    
-    dat_cli <- data_c() %>%
-      dplyr::filter(CliNitPpal == id_val$nit, LinNegCod == id_val$linneg_cod)
-    
-    cod_ultimo <- dat_cli %>%
-      dplyr::arrange(dplyr::desc(PdcFecCre)) %>%
-      dplyr::pull(CLPdcCod) %>%
-      dplyr::first()
-    
-    ultimo <- dat_cli %>% dplyr::filter(CLPdcCod == cod_ultimo)
-    
-    segmento <- if (nrow(crm) > 0 && nzchar(crm$Segmento[1] %||% "")) crm$Segmento[1] else "\u2014"
-    asesor   <- if (nrow(crm) > 0 && nzchar(crm$Asesor[1]   %||% "")) crm$Asesor[1]   else "\u2014"
-    ultima_fac <- tryCatch({
-      m <- max(dat_cli$FecFact, na.rm = TRUE)
-      if (is.infinite(m)) "\u2014" else format(m, "%d %b %Y")
-    }, error = function(e) "\u2014")
-    
-    if (nrow(ultimo) > 0) {
-      cod_pedido <- as.character(cod_ultimo %||% "\u2014")
-      fec_pedido <- tryCatch(
-        format(as.Date(ultimo$PdcFecCre[1]), "%d %b %Y"), error = function(e) "\u2014"
-      )
-      usr_pedido <- ultimo$Usuario[1] %||% "\u2014"
-      sacos_tot  <- format(sum(ultimo$SacLote, na.rm = TRUE), big.mark = ".", decimal.mark = ",")
-    } else {
-      cod_pedido <- fec_pedido <- usr_pedido <- sacos_tot <- "\u2014"
-    }
-    
-    .seccion <- function(label) {
-      tags$p(
-        style = paste0(
-          "font-size:10px; font-weight:700; color:#94A3B8; ",
-          "text-transform:uppercase; letter-spacing:0.05em; margin:0 0 6px;"
-        ),
-        label
-      )
-    }
-    
-    .item <- function(icono, label, valor) {
-      tags$div(
-        style = "display:flex; align-items:flex-start; gap:6px; margin-bottom:4px;",
-        tags$span(icon(icono), style = "color:#64748B; font-size:10px; width:13px; margin-top:1px;"),
-        tags$span(label, style = "font-size:11px; color:#64748B; min-width:90px; flex-shrink:0;"),
-        tags$span(valor, style = "font-size:11px; font-weight:600; color:#374151;")
-      )
-    }
-    
-    lotes_ui <- if (nrow(ultimo) > 0) {
-      items <- lapply(seq_len(nrow(ultimo)), function(i) {
-        f <- ultimo[i, ]
-        tags$div(
-          style = paste0(
-            "background:white; border:1px solid #E2E8F0; border-radius:4px;",
-            "padding:5px 8px; margin-bottom:4px;"
-          ),
-          tags$div(
-            style = "display:flex; justify-content:space-between; align-items:center;",
-            tags$div(
-              tags$span(
-                as.character(f$CLLotCod),
-                style = "font-size:11px; font-weight:700; color:#1E40AF;"
-              ),
-              tags$span(
-                paste0(" \u00b7 ", f$Categoria %||% "\u2014", " / ", f$Producto %||% "\u2014"),
-                style = "font-size:10px; color:#64748B;"
-              )
-            ),
-            tags$span(
-              paste0(format(f$SacLote, big.mark = ".", decimal.mark = ","), " sacos"),
-              style = "font-size:11px; font-weight:600; color:#374151;"
-            )
-          )
-        )
-      })
-      do.call(tagList, items)
-    } else {
-      tags$span("\u2014", style = "font-size:11px; color:#94A3B8;")
-    }
-    
-    tags$div(
-      style = paste0(
-        "background:#F8FAFC; border:1px solid #E2E8F0; border-radius:6px;",
-        "padding:12px 14px; margin-bottom:14px;"
-      ),
-      fluidRow(
-        column(4,
-               .seccion("Datos CRM"),
-               .item("calendar",    "Última factura:", ultima_fac),
-               .item("layer-group", "Segmento:",       segmento),
-               .item("user",        "Asesor:",          asesor)
-        ),
-        column(4,
-               .seccion("Último pedido"),
-               .item("hashtag",        "Código:",     cod_pedido),
-               .item("calendar-plus",  "Creación:",   fec_pedido),
-               .item("user-pen",       "Usuario:",    usr_pedido),
-               .item("weight-hanging", "Sacos tot.:", sacos_tot)
-        ),
-        column(4,
-               .seccion(paste0("Lotes (", nrow(ultimo), ")")),
-               lotes_ui
-        )
-      )
+    .renderizar_resumen_cliente(
+      id_val      = cli_identidad_rv(),
+      dat_cli_all = data_c(),
+      crm_all     = clientes_raw_cache$get()
     )
   })
   
@@ -982,7 +1024,7 @@ server <- function(input, output, session) {
       req(length(nit) == 1L, !is.na(nit))
       cli_identidad_rv(list(nit = nit, linneg_cod = lin))
     },
-    modal_titulo_fn    = function(sel) paste0(sel$PerRazSoc, " \u2014 ", sel$CLLinNegNo),
+    modal_titulo_fn    = function(sel) paste0(sel$PerRazSoc, " — ", sel$CLLinNegNo),
     modal_contenido_fn = function(sel) tagList(
       uiOutput("resumen_cli_modal"),
       IndFormularioUI("mod_form_cli")
@@ -1016,7 +1058,7 @@ server <- function(input, output, session) {
     con_fact_anho %>%
       dplyr::inner_join(crm_reciente, by = c("CliNitPpal", "LinNegCod")) %>%
       dplyr::mutate(
-        label           = paste0(CLLinNegNo, " \u2014 ", PerRazSoc),
+        label           = paste0(CLLinNegNo, " — ", PerRazSoc),
         UltActualizacion = format(FecProceso, "%d %b %Y")
       ) %>%
       dplyr::arrange(label) %>%
@@ -1027,133 +1069,14 @@ server <- function(input, output, session) {
   # reactiveVal de identidad independiente para no colisionar con cli_identidad_rv
   cli_ant_identidad_rv <- reactiveVal(NULL)
   
-  # Resumen del modal para "información antigua" — reutiliza lógica de resumen_cli_modal
-  # pero con identidad propia (cli_ant_identidad_rv) para aislamiento total
+  # Resumen del modal para "información antigua" — reutiliza el mismo
+  # renderizador de resumen_cli_modal, con la fila extra de última actualización
   output$resumen_cli_ant_modal <- renderUI({
-    id_val <- cli_ant_identidad_rv()
-    req(!is.null(id_val), length(id_val$nit) == 1L, !is.na(id_val$nit))
-    
-    crm <- clientes_raw_cache$get() %>%
-      dplyr::filter(CliNitPpal == id_val$nit, LinNegCod == id_val$linneg_cod) %>%
-      dplyr::arrange(dplyr::desc(FecProceso)) %>%
-      dplyr::slice(1)
-    
-    dat_cli <- data_c() %>%
-      dplyr::filter(CliNitPpal == id_val$nit, LinNegCod == id_val$linneg_cod)
-    
-    cod_ultimo <- dat_cli %>%
-      dplyr::arrange(dplyr::desc(PdcFecCre)) %>%
-      dplyr::pull(CLPdcCod) %>%
-      dplyr::first()
-    
-    ultimo <- dat_cli %>% dplyr::filter(CLPdcCod == cod_ultimo)
-    
-    # Fecha de último proceso CRM — específico de este modal
-    ult_proceso <- if (nrow(crm) > 0) {
-      format(crm$FecProceso[1], "%d %b %Y")
-    } else "\u2014"
-    
-    segmento <- if (nrow(crm) > 0 && nzchar(crm$Segmento[1] %||% "")) {
-      crm$Segmento[1]
-    } else "\u2014"
-    asesor <- if (nrow(crm) > 0 && nzchar(crm$Asesor[1] %||% "")) {
-      crm$Asesor[1]
-    } else "\u2014"
-    ultima_fac <- tryCatch({
-      m <- max(dat_cli$FecFact, na.rm = TRUE)
-      if (is.infinite(m)) "\u2014" else format(m, "%d %b %Y")
-    }, error = function(e) "\u2014")
-    
-    if (nrow(ultimo) > 0) {
-      cod_pedido <- as.character(cod_ultimo %||% "\u2014")
-      fec_pedido <- tryCatch(
-        format(as.Date(ultimo$PdcFecCre[1]), "%d %b %Y"), error = function(e) "\u2014"
-      )
-      usr_pedido <- ultimo$Usuario[1] %||% "\u2014"
-      sacos_tot  <- format(
-        sum(ultimo$SacLote, na.rm = TRUE), big.mark = ".", decimal.mark = ","
-      )
-    } else {
-      cod_pedido <- fec_pedido <- usr_pedido <- sacos_tot <- "\u2014"
-    }
-    
-    .seccion <- function(label) {
-      tags$p(
-        style = paste0(
-          "font-size:10px; font-weight:700; color:#94A3B8; ",
-          "text-transform:uppercase; letter-spacing:0.05em; margin:0 0 6px;"
-        ),
-        label
-      )
-    }
-    
-    .item <- function(icono, label, valor) {
-      tags$div(
-        style = "display:flex; align-items:flex-start; gap:6px; margin-bottom:4px;",
-        tags$span(icon(icono), style = "color:#64748B; font-size:10px; width:13px; margin-top:1px;"),
-        tags$span(label, style = "font-size:11px; color:#64748B; min-width:90px; flex-shrink:0;"),
-        tags$span(valor, style = "font-size:11px; font-weight:600; color:#374151;")
-      )
-    }
-    
-    lotes_ui <- if (nrow(ultimo) > 0) {
-      items <- lapply(seq_len(nrow(ultimo)), function(i) {
-        f <- ultimo[i, ]
-        tags$div(
-          style = paste0(
-            "background:white; border:1px solid #E2E8F0; border-radius:4px;",
-            "padding:5px 8px; margin-bottom:4px;"
-          ),
-          tags$div(
-            style = "display:flex; justify-content:space-between; align-items:center;",
-            tags$div(
-              tags$span(
-                as.character(f$CLLotCod),
-                style = "font-size:11px; font-weight:700; color:#1E40AF;"
-              ),
-              tags$span(
-                paste0(" \u00b7 ", f$Categoria %||% "\u2014", " / ", f$Producto %||% "\u2014"),
-                style = "font-size:10px; color:#64748B;"
-              )
-            ),
-            tags$span(
-              paste0(format(f$SacLote, big.mark = ".", decimal.mark = ","), " sacos"),
-              style = "font-size:11px; font-weight:600; color:#374151;"
-            )
-          )
-        )
-      })
-      do.call(tagList, items)
-    } else {
-      tags$span("\u2014", style = "font-size:11px; color:#94A3B8;")
-    }
-    
-    tags$div(
-      style = paste0(
-        "background:#F8FAFC; border:1px solid #E2E8F0; border-radius:6px;",
-        "padding:12px 14px; margin-bottom:14px;"
-      ),
-      fluidRow(
-        column(4,
-               .seccion("Datos CRM"),
-               # Fecha de última actualización CRM — diferenciador clave vs modal de sin info
-               .item("clock",       "Últ. actualiz.:", ult_proceso),
-               .item("calendar",    "Última factura:", ultima_fac),
-               .item("layer-group", "Segmento:",       segmento),
-               .item("user",        "Asesor:",          asesor)
-        ),
-        column(4,
-               .seccion("Último pedido"),
-               .item("hashtag",        "Código:",     cod_pedido),
-               .item("calendar-plus",  "Creación:",   fec_pedido),
-               .item("user-pen",       "Usuario:",    usr_pedido),
-               .item("weight-hanging", "Sacos tot.:", sacos_tot)
-        ),
-        column(4,
-               .seccion(paste0("Lotes (", nrow(ultimo), ")")),
-               lotes_ui
-        )
-      )
+    .renderizar_resumen_cliente(
+      id_val             = cli_ant_identidad_rv(),
+      dat_cli_all        = data_c(),
+      crm_all            = clientes_raw_cache$get(),
+      mostrar_ult_proceso = TRUE
     )
   })
   
@@ -1172,7 +1095,7 @@ server <- function(input, output, session) {
       req(length(nit) == 1L, !is.na(nit))
       cli_ant_identidad_rv(list(nit = nit, linneg_cod = lin))
     },
-    modal_titulo_fn    = function(sel) paste0(sel$PerRazSoc, " \u2014 ", sel$CLLinNegNo),
+    modal_titulo_fn    = function(sel) paste0(sel$PerRazSoc, " — ", sel$CLLinNegNo),
     modal_contenido_fn = function(sel) tagList(
       uiOutput("resumen_cli_ant_modal"),
       IndFormularioUI("mod_form_cli")          # reutiliza el mismo formulario
@@ -1189,6 +1112,21 @@ server <- function(input, output, session) {
     }),
     usr = usuario
   )
+  ### Migracion de Cartera -----
+  MenuHeaderServer(
+    id = "MenuMigrarCartera",
+    items_r = reactive(data.frame(id = "migrar", label = "Migrar Cartera", stringsAsFactors = FALSE)),
+    key_cols = "id",
+    showHeader = FALSE,
+    href = NULL,
+    modal_titulo_fn = function(sel) "Migrar Cartera entre Asesores",
+    modal_icon = "people-arrows",
+    modal_size = "m",
+    modal_contenido_fn = function(sel) MigrarCarteraUI(shiny::NS("MenuMigrarCartera"))
+  )
+  
+  # Lógica de migración, registrada con el mismo id para compartir namespace
+  MigrarCartera("MenuMigrarCartera", usuario)
   ### Productos sin información ----
   # productos_cache reemplaza CargarDatos("CRMNALPRODS") directo
   # nmarcom_cache / nmarcas_cache reemplazan dos ConsultaSistema sin cache
@@ -1208,7 +1146,7 @@ server <- function(input, output, session) {
       dplyr::left_join(nmarcas_cache$get(), by = "MrcCod") %>%
       dplyr::rename(LinNeg = CLLinNegNo) %>%
       dplyr::arrange(desc(SacosYTD)) %>%
-      dplyr::mutate(label = paste0(LinNeg, " \u2014 ", MCNom, " / ", Marca)) %>%
+      dplyr::mutate(label = paste0(LinNeg, " — ", MCNom, " / ", Marca)) %>%
       select(-SacosYTD)
   })
   
@@ -1256,11 +1194,13 @@ server <- function(input, output, session) {
     Unicos(c(data_c()$PerRazSoc, data_leads_f()$PerRazSoc))
   })
   Cotizacion("Cotizador", usuario, data_c, persona_r)
-
+  
   data_not_modulo <- reactive({
     notes_data() %>% filter(Responsable == usuario())
   })
   Notificaciones("Notificaciones", data_not_modulo)
+  
+  FormularioContacto(id = "Contacto", usr = usuario, cod_contacto = reactive(""))
   
   TaskCreation("Tareas",     usuario, notes_data)
   noteDisplay("NotasTareas", usuario, notes_data)
@@ -1269,7 +1209,7 @@ server <- function(input, output, session) {
   GestionProducto("Productos", data_c, usuario)
   
   ## Cuerpo ----
-
+  
   ### Hoja de trabajo ----
   ResumenTotal(id = "ResumenTotal", 
                dat = data_f, dat_t = data_t, dat_c = data_c,
@@ -1289,22 +1229,22 @@ server <- function(input, output, session) {
   TablaOportunidades("Listado", data_op = data_oportunidades_f, usr = usuario,
                      trigger_update = trigger_update_opt)
   DashboardOportunidades("Oportunidades", data_oportunidades_f)
-
+  
   ### Clientes ----
   DetalleCliente(id = "ResumenClientes", data_f, usr = usuario,
                  trigger_update = trigger_update_opt)
-
+  
   ppto_clientes <- reactive({ data_t() %>% filter(SegmentoRacafe == "CLIENTE") })
   Presupuesto("Presupuesto", ppto_clientes, clientes_raw)
-
+  
   RFM("RFMClientesSacos",  data_rfm_cliente_f_s)
   RFM("RFMClientesMargen", data_rfm_cliente_f_m, "$ MNFCC")
   ClientesNuevosRecuperados("ClientesNuevosRecuperados", datos_rv, data_f)
-
+  
   ### Clientes a Recuperar ----
   DetalleClienteRecuperar(id = "ResumenClientesRecuperar", data_f, usr = usuario,
                           trigger_update = trigger_update_opt)
-
+  
   output$ClientesRecuperarConPPto <- renderDT({
     aux1 <- data_f() %>%
       filter(SegmentoRacafe == "CLIENTE A RECUPERAR", PptoMargen != 0) %>%
@@ -1330,15 +1270,15 @@ server <- function(input, output, session) {
     ImprimirDTRAzSocLinNeg(
       aux1,
       noms     = c(
-        "Raz\u00f3n Social", "L\u00ednea de Negocio", "Segmento Racaf\u00e9",
-        "\u00daltima Facturaci\u00f3n", "Presupuesto",
-        "Sacos Mes", "Sacos A\u00f1o", "M\u00e1rgen Mes", "M\u00e1rgen A\u00f1o"
+        "Razón Social", "Línea de Negocio", "Segmento Racafé",
+        "Última Facturación", "Presupuesto",
+        "Sacos Mes", "Sacos Año", "Márgen Mes", "Márgen Año"
       ),
       formatos = c(NA, NA, NA, NA, "dinero", "sacos", "sacos", "dinero", "dinero"),
       dom = "Bft", buscar = TRUE, alto = 500
     )
   })
-
+  
   data_sankey_clirec <- reactive({
     data_f() %>%
       mutate(
@@ -1352,15 +1292,15 @@ server <- function(input, output, session) {
           EstadoCliente == "CONTACTADO" & EstadoNegocio == "DESCARTADO" ~
             RazonDescartado,
           EstadoCliente == "CONTACTADO" & grepl("OPORTUNIDAD", EstadoNegocio) ~
-            paste("Cada", FrecuenciaDias, "d\u00edas")
+            paste("Cada", FrecuenciaDias, "días")
         ))
       )
   })
   SankeyTabla("ClienteRecuperar", data_sankey_clirec)
-
+  
   RFM("RFMCliRecSacos",  data_rfm_clirec_f_s)
   RFM("RFMCliRecMargen", data_rfm_clirec_f_m, "$ MNFCC")
-
+  
   output$ClientesRecuperar <- renderDT({
     # segmentos_raw_cache reemplaza CargarDatos("CRMNALSEGR") directo
     # Se requiere histórico de dos snapshots; segmentos_cache solo expone el último
@@ -1372,7 +1312,7 @@ server <- function(input, output, session) {
       setNames(c("LinNegCod", "CliNitPpal", "Antes", "Ahora")) %>%
       filter(Antes %in% c("CLIENTE", NA) & Ahora == "CLIENTE A RECUPERAR") %>%
       select(LinNegCod, CliNitPpal)
-
+    
     aux2 <- data_f() %>%
       inner_join(aux1, by = join_by(LinNegCod, CliNitPpal)) %>%
       group_by(PerRazSoc, LineaNegocio = CLLinNegNo, Segmento) %>%
@@ -1396,73 +1336,61 @@ server <- function(input, output, session) {
     ImprimirDTRAzSocLinNeg(
       aux2,
       noms     = c(
-        "Raz\u00f3n Social", "L\u00ednea de Negocio", "Segmento Racaf\u00e9",
-        "\u00daltima Facturaci\u00f3n",
-        "Sacos Mes", "Sacos A\u00f1o", "M\u00e1rgen Mes", "M\u00e1rgen A\u00f1o"
+        "Razón Social", "Línea de Negocio", "Segmento Racafé",
+        "Última Facturación",
+        "Sacos Mes", "Sacos Año", "Márgen Mes", "Márgen Año"
       ),
       formatos = c(NA, NA, NA, NA, "sacos", "sacos", "dinero", "dinero"),
       dom = "Bft", buscar = TRUE, alto = 500
     )
   })
+  
+  ### Embudos ----
+  TablaContactos("EmbudoContactos", usr = usuario)
+  TablaProspectos("EmbudoProspectos", usr = usuario)
+  TablaLeads("EmbudoLeads", usr = usuario)
+  TablaDescartados("EmbudoDescartados", usr = usuario)
+  KanbanEmbudo("EmbudoKanban", usr = usuario)
+  EmbudoConversion("EmbudoConversion")
 
-  ### Leads ----
-  dt_ResumenLeads <- reactive({
-    aux1 <- data_leads_f() %>%
-      select(-c(UsuarioCrea, FechaHoraCrea, UsuarioMod, FechaHoraModi)) %>%
-      mutate(pct_missing = rowSums(is.na(.)) / ncol(.)) %>%
-      select(PerRazSoc, Asesor, pct_missing, SacosPotencial, MargenPotencial)
-    aux1$pct_missing <- sapply(aux1$pct_missing, function(x) {
-      FormatearNumero(x, formato = "porcentaje", meta = c(0.5, 0.7), prop = FALSE)
-    })
-    aux1 %>%
-      ImprimirDTLead(
-        botones  = c("Contacto", "Editar"),
-        noms     = c("Raz\u00f3n Social", "Asesor", "Pct Ausente", "Sacos (70kg)", "M\u00e1rgen"),
-        formatos = c(NA, NA, NA, "sacos", "dinero"),
-        dom      = "ft",
-        buscar   = TRUE
-      )
-  })
-  dd_ResumenLeads <- reactive({ datos_rv() })
-  TablaModalCelda("ResumenLeads", dt_ResumenLeads, dd_ResumenLeads, usuario, rv)
-
-  data_sankey_lead <- reactive({
-    data_leads_f() %>%
-      mutate(
-        CliNitPpal = PerRazSoc,
-        CLLinNegNo = LinNegocio,
-        FecFact    = NA,
-        FecDesp    = NA,
-        Kilos      = ifelse(LinNegocio == 10000, SacosPotencial * 62.5, SacosPotencial * 70),
-        Margen     = MargenPotencial,
-        Niv1       = ifelse(is.na(EstadoCuenta), "POR CONTACTAR", EstadoCuenta),
-        Niv2       = ifelse(
-          EstadoCuenta == "CONTACTADO",
-          ifelse(is.na(EstadoNegocio), "SIN ESTADO", EstadoNegocio),
-          NA
-        ),
-        Niv3 = str_to_upper(case_when(
-          EstadoCuenta == "CONTACTADO" & EstadoNegocio == "DESCARTADO" ~ RazonDescartado
-        ))
-      )
-  })
-  SankeyTabla("Leads", data_sankey_lead)
-
+  
   ### Consulta Individual ----
-  Individual(
-    "ConsultaIndivual",
-    dat          = data_individual,
-    usr          = usuario,
-    clientes_raw = clientes_raw,
-    dat_global   = data_c
-  )
-
+  
+  observeEvent(input$IND_CLCliNit, {
+    sel <- input$IND_CLCliNit
+    req(length(sel) > 0)
+    padres <- di_lookup() %>%
+      dplyr::filter(as.character(CLCliNit) %in% sel) %>%
+      dplyr::distinct(CliNitPpal)
+    if (nrow(padres) == 1) {
+      updatePickerInput(session, "IND_CliNitPpal", selected = as.character(padres$CliNitPpal[1]))
+    }
+  }, ignoreInit = TRUE)
+  observeEvent(input$IND_CliNitPpal, {
+    val <- input$IND_CliNitPpal
+    req(nzchar(val))
+    hijos <- di_lookup() %>% dplyr::filter(as.character(CliNitPpal) == val)
+    req(nrow(hijos) > 0)
+    
+    nuevas_cli <- choices_clcli_nit[choices_clcli_nit %in% as.character(hijos$CLCliNit)]
+    updatePickerInput(session, "IND_CLCliNit", choices = c(nuevas_cli), selected = unname(nuevas_cli))
+  }, ignoreInit = TRUE)
+  observeEvent(input$IND_Limpiar, {
+    updatePickerInput(session, "IND_CLCliNit", choices = choices_clcli_nit,
+                      selected = unname(choices_clcli_nit))
+    updatePickerInput(session, "IND_CliNitPpal", selected = "")
+    updatePickerInput(session, "IND_LinNeg",     selected = "")
+  })
+  
+  Individual("ConsultaIndivual", dat = data_individual, usr = usuario, 
+             clientes_raw = clientes_raw, dat_global = data_c, ncliente = ncliente_rv)
+  
   # Footer ----
   output$last_update_info <- renderText({
     updates    <- map_dbl(all_caches, ~ as.numeric(.$last_update()))
     oldest_upd <- as.POSIXct(min(updates, na.rm = TRUE), origin = "1970-01-01")
     HTML(FormatearTexto(
-      paste("\u00daltima actualizaci\u00f3n:", format(oldest_upd, "%Y-%m-%d %H:%M:%S")),
+      paste("Última actualización:", format(oldest_upd, "%Y-%m-%d %H:%M:%S")),
       tamano_pct = 0.6
     ))
   })

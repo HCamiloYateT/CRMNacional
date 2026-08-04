@@ -8,8 +8,8 @@ controlbar <- bs4DashControlbar(id = "controlbar", skin = "light", pinned = NULL
                                                  ),
                                   controlbarItem("Crear Tareas/Notas",
                                                  TaskCreationUI("Tareas")),
-                                  controlbarItem("Crear Lead",
-                                                 FormularioLeadsUI("Ingreso", "crear")
+                                  controlbarItem("Crear Contacto",
+                                                 FormularioContactoUI("Contacto")
                                                  ),
                                   controlbarItem("Cotizador",
                                                  CotizacionUI("Cotizador")

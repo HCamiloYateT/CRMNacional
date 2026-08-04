@@ -4,18 +4,19 @@ setwd("/home/htamara/6_IndustriaNacional/CRM Cliente Nacional")
 Sys.setenv(LANG = "es_CO.UTF-8")
 Sys.setlocale("LC_TIME", "es_ES.UTF-8")
 options(dplyr.summarise.inform = FALSE,
-        OutDec = ".", 
-        scipen = 999, 
+        OutDec = ".",
+        scipen = 999,
         lubridate.week.start = 1,
         repos = c(CRAN = "https://cloud.r-project.org"))
 
 # Librerias ----
-required_packages <- c("racafe", "tidyverse", "lubridate", "httr", "readxl", 
+required_packages <- c("racafe", "tidyverse", "lubridate", "httr", "readxl",
                        "openxlsx2", "rfm", "CLVTools")
 racafe::Loadpkg(required_packages)
 
 
 # Funciones: OneDrive ----
+
 # Descarga un archivo de OneDrive por ID, escribe en disco y retorna ruta temp
 .onedrive_descargar_raw <- function(file_id, usuario) {
   access_token <- racafe::ObtenerTokenAcceso()
@@ -139,7 +140,7 @@ cargar_lotes_incremental <- function(datos_previos = NULL) {
 # lote+tipo independientemente del ano de facturacion.
 cargar_fact <- function() {
   fact_sys_nal <- ConsultaSistema("syscafe",
-                              query = "SELECT F1.FcnLot      AS CLLotCod,
+                                  query = "SELECT F1.FcnLot      AS CLLotCod,
                                               MIN(F2.FcnFec) AS FecPrimerFact,
                                               MAX(F2.FcnFec) AS FecFact,
                                               SUM(F1.FcnKilLot)         AS KilosFact,
@@ -147,12 +148,12 @@ cargar_fact <- function() {
                                               SUM(F1.FcnKilLot / 70.)    AS SacFact70
                                        FROM   FCTFACN1 F1
                                        LEFT   JOIN FCTFACNA F2 ON F1.FcnNum = F2.FcnNum
-                                       WHERE  F1.CiaCod = 10 AND  
-                                              F2.CiaCod = 10 AND  
+                                       WHERE  F1.CiaCod = 10 AND
+                                              F2.CiaCod = 10 AND
                                               F2.FcnEtd = 'C'
                                       GROUP  BY F1.FcnLot")
   fact_sys_ext <- ConsultaSistema("syscafe",
-                                   query = "SELECT F1.FctLot AS CLLotCod,
+                                  query = "SELECT F1.FctLot AS CLLotCod,
                                                    MIN(F2.FctFec)         AS FecPrimerFact,
                                                    MAX(F2.FctFec)         AS FecFact,
                                                    SUM(F1.FctKilLot)      AS KilosFact,
@@ -160,7 +161,7 @@ cargar_fact <- function() {
                                                    SUM(F1.FctKilLot / 70.) AS SacFact70
                                             FROM FCTFACC2 F1
                                             LEFT JOIN FCTFACCA F2 ON F1.FctNum = F2.FctNum
-                                            WHERE F1.CiaCod = 10 AND 
+                                            WHERE F1.CiaCod = 10 AND
                                                   F2.CiaCod = 10 AND
                                                   F1.FctLotAnu <> 'S'
                                             GROUP BY F1.FctLot")
@@ -170,15 +171,15 @@ cargar_fact <- function() {
                                     SUM(MARGEN)     AS Margen,
                                     SUM(SACOS70)    AS SacosPYG
                             FROM CRMNALMARLOT
-                            GROUP BY LOTE") %>% 
+                            GROUP BY LOTE") %>%
     mutate(FechaFactura = as.Date(FechaFactura))
   
-  bind_rows(fact_sys_nal, fact_sys_ext) %>% 
+  bind_rows(fact_sys_nal, fact_sys_ext) %>%
     full_join(fact_margenes, by = "CLLotCod") %>%
     mutate(FecFact = if_else(is.na(FecFact), FechaFactura, FecFact),
-           FecPrimerFact = if_else(is.na(FecPrimerFact), FechaFactura, FecPrimerFact)) %>% 
+           FecPrimerFact = if_else(is.na(FecPrimerFact), FechaFactura, FecPrimerFact)) %>%
     filter(FecPrimerFact >= as.Date("2020-01-01")) %>%
-    select(-FechaFactura) %>% 
+    select(-FechaFactura) %>%
     mutate(Facturado = TRUE, FecFact = as.Date(FecFact))
 }
 
@@ -266,6 +267,150 @@ cargar_margenes_onedrive <- function(usuario, id_carpeta_raiz) {
   return(res)
 }
 
+# Funciones: imputacion en cascada --------------------------------------------
+
+# Imputa una columna numerica en cascada, de mas especifico a mas general.
+# 'niveles' es una lista de vectores de nombres de columnas de agrupacion,
+# ordenados de mayor a menor especificidad; el ultimo nivel puede ser
+# character(0) para un promedio global sin agrupar (ultimo recurso).
+# En cada nivel se calcula el promedio SOLO con filas no-NA (via left_join,
+# no via group_by/mutate repetido sobre el objeto completo), lo cual evita
+# el costo de reagrupar el data frame entero en cada paso de la cascada.
+imputar_cascada <- function(df, valor_col, niveles) {
+  for (grupo_vars in niveles) {
+    
+    # Nivel global (sin agrupar): promedio general como ultimo recurso
+    if (length(grupo_vars) == 0L) {
+      media_global <- mean(df[[valor_col]], na.rm = TRUE)
+      df[[valor_col]] <- ifelse(is.na(df[[valor_col]]), media_global, df[[valor_col]])
+      next
+    }
+    
+    # Promedio del valor en el nivel de agregacion actual (solo filas validas)
+    medias_nivel <- df %>%
+      filter(!is.na(.data[[valor_col]])) %>%
+      group_by(across(all_of(grupo_vars))) %>%
+      summarise(.media_tmp = mean(.data[[valor_col]], na.rm = TRUE), .groups = "drop")
+    
+    # Union por join: solo se completan los NA restantes en este nivel
+    df <- df %>%
+      left_join(medias_nivel, by = grupo_vars) %>%
+      mutate(across(all_of(valor_col), ~ ifelse(is.na(.), .media_tmp, .))) %>%
+      select(-.media_tmp)
+  }
+  df
+}
+
+# Cascada de imputacion de margen por kilo (MarKilo), de mas a menos especifica.
+# Los niveles que omiten CLLinNegNo (marcados abajo) permiten que clientes
+# nuevos o clientes sin historial en una linea de negocio especifica hereden
+# el margen del MISMO producto transado en otra linea, en vez de saltar
+# directo a un promedio generico de linea de negocio.
+niveles_margen <- list(
+  c("CLCliNit", "CLLinNegNo", "LinProCod", "MCCod", "MrcCod"),
+  c("CLLinNegNo", "LinProCod", "MCCod", "MrcCod"),
+  c("LinProCod", "MCCod", "MrcCod"),          # sin CLLinNegNo: producto exacto, cualquier linea
+  c("CLLinNegNo", "LinProCod"),
+  c("LinProCod"),                              # sin CLLinNegNo: categoria de producto sola
+  c("CLLinNegNo"),
+  character(0)                                 # promedio global: ultimo recurso
+)
+
+# Funciones: CLV (Pareto/NBD) por CliNitPpal + LinNegCod ----------------------
+
+# Estima Churn (1 - PAlive) y SacosPred para cada combinacion CliNitPpal+LinNegCod
+# en una fecha de corte dada. Llave alineada con RFM y con el consumo en la app
+# (Individual.R filtra por CliNitPpal + LinNegCod).
+procesar_clv <- function(fecha_corte, data_fuente = data, unidad = "weeks") {
+  
+  base_trans <- data_fuente %>%
+    filter(FecFact < fecha_corte,
+           !is.na(FecFact),
+           year(FecFact) >= 2020,
+           !is.na(CliNitPpal), !is.na(LinNegCod)) %>%
+    mutate(Id = paste(CliNitPpal, LinNegCod, sep = "_")) %>%
+    group_by(Id, CliNitPpal, LinNegCod, Date = PrimerDia(FecFact, uni = unidad)) %>%
+    summarise(Price = sum(SacDesp, na.rm = TRUE), .groups = "drop")
+  
+  if (nrow(base_trans) == 0L) return(data.frame())
+  
+  ids_map <- base_trans %>%
+    select(Id, CliNitPpal, LinNegCod) %>%
+    distinct()
+  
+  apparelTrans <- base_trans %>%
+    select(Id, Date, Price)
+  
+  fec_split <- PrimerDia(max(apparelTrans$Date)) - months(1) - days(1)
+  
+  apparelTrans_filtered <- apparelTrans %>%
+    group_by(Id) %>%
+    mutate(first_transaction = min(Date)) %>%
+    filter(first_transaction <= fec_split) %>%
+    ungroup() %>%
+    select(-first_transaction)
+  
+  if (nrow(apparelTrans_filtered) == 0L) return(data.frame())
+  
+  resultado <- tryCatch({
+    clv_data <- CLVTools::clvdata(apparelTrans_filtered,
+                                  date.format        = "ymd",
+                                  time.unit          = unidad,
+                                  name.id            = "Id",
+                                  name.date          = "Date",
+                                  name.price         = "Price",
+                                  estimation.split   = fec_split)
+    
+    est_pnbd <- CLVTools::pnbd(clv.data = clv_data)
+    
+    # FIX: predicted.total.spending NO existe; se usa predicted.period.spending
+    pred <- CLVTools::predict(est_pnbd,
+                              prediction.end = PrimerDia(fecha_corte) + months(1) - days(1))
+    
+    col_spending <- if ("predicted.period.spending" %in% names(pred)) {
+      pred$predicted.period.spending
+    } else {
+      pred$CET * pred$predicted.mean.spending
+    }
+    
+    pred %>%
+      mutate(SacosPred  = pmax(0, round(col_spending)),
+             FecProceso = fecha_corte + days(1),
+             Churn      = 1 - PAlive) %>%
+      left_join(ids_map, by = "Id") %>%
+      select(FecProceso, CliNitPpal, LinNegCod, Churn, SacosPred) %>%
+      group_by(FecProceso, CliNitPpal, LinNegCod) %>%
+      summarise(Churn = mean(Churn, na.rm = TRUE),
+                SacosPred = sum(SacosPred, na.rm = TRUE),
+                .groups = "drop")
+    
+  }, error = function(e) {
+    message("Error CLV fecha ", fecha_corte, ": ", e$message)
+    data.frame()
+  })
+  
+  resultado
+}
+
+# Funciones: utilidades de segmentacion (RFM / Racafe) ------------------------
+
+identificar_clientes_faltantes <- function(df_referencia, df_comparacion) {
+  df_referencia %>%
+    group_by(CliNitPpal, LinNegCod, Usuario) %>%
+    summarise(FecFact = max(FecFact), .groups = "drop") %>%
+    distinct() %>%
+    anti_join(
+      df_comparacion %>% select(CliNitPpal, LinNegCod) %>% distinct(),
+      by = join_by(CliNitPpal, LinNegCod)
+    )
+}
+generar_fechas_analisis <- function(fecha_inicio, fecha_fin = Sys.Date(), por = "month", ajuste = 0) {
+  fechas <- seq.Date(as.Date(fecha_inicio), PrimerDia(fecha_fin), by = por)
+  if (ajuste != 0L) fechas <- fechas + lubridate::days(ajuste)
+  fechas
+}
+
+
 # Procesamiento: 1. Margenes ---------------------------------------------------
 print("Cargando datos de margenes...")
 
@@ -303,13 +448,22 @@ print("Cargando datos principales...")
 
 # Tabla maestra de sucursales — con tildes para que LimpiarNombres produzca
 sucs <- data.frame(SucCod = c(12, 15, 20, 26, 30, 32, 35, 50, 55),
-                   Sucursal = c("Trilladora 12","Bachué", "Medellín", "Popayán", "Armenia", 
-                                "Arenales", "Pereira", "Bucaramanga", "Huila")) %>% 
+                   Sucursal = c("Trilladora 12","Bachué", "Medellín", "Popayán", "Armenia",
+                                "Arenales", "Pereira", "Bucaramanga", "Huila")) %>%
   mutate(across(where(is.character), LimpiarNombres))
 
-# NIT principal por cliente (snapshot mas reciente)
-NITPPAL <- Consulta("SELECT DISTINCT FecProceso, CLCliNit AS PerCod, CliNitPpal FROM CRMNALCLIENTE") %>%
-  mutate(FecProceso = as.Date(FecProceso)) %>%
+# Snapshot completo de CRMNALCLIENTE, cargado UNA sola vez y reutilizado
+# para NITPPAL (NIT principal por cliente, seccion 2) y para los segmentos
+# Racafe/RFM (seccion 3). FecProceso se lleva a datetime para que, si hay
+# mas de un proceso el mismo dia, siempre se tome el mas reciente.
+personas <- Consulta("SELECT * FROM CRMNALCLIENTE") %>%
+  mutate(FecProceso = as_datetime(FecProceso))
+
+# NIT principal por cliente (snapshot mas reciente), derivado de 'personas'
+# en vez de una segunda consulta a CRMNALCLIENTE.
+NITPPAL <- personas %>%
+  select(FecProceso, PerCod = CLCliNit, CliNitPpal) %>%
+  distinct() %>%
   group_by(PerCod) %>%
   filter(FecProceso == max(FecProceso)) %>%
   ungroup() %>%
@@ -318,7 +472,7 @@ NITPPAL <- Consulta("SELECT DISTINCT FecProceso, CLCliNit AS PerCod, CliNitPpal 
 # Datos maestros de clientes desde sistema transaccional
 CREACION <- ConsultaSistema("syscafe", "SELECT DISTINCT PerCod, PerFecCre from NPERSONA")
 
-NCLIENTE <- ConsultaSistema("syscafe", 
+NCLIENTE <- ConsultaSistema("syscafe",
                             query = "SELECT c.CliNit AS PerCod, c.CliCont, c.CliDir,
                                             c.CliDir1, c.CliTel, c.CliConCom, c.CliTelCom,
                                             c.CliEmlCom, c.CiuExtCod, c.CliFPagDbl,
@@ -332,7 +486,7 @@ NCLIENTE <- ConsultaSistema("syscafe",
 
 # Pedidos activos de venta nacional
 ped <- ConsultaSistema("syscafe",
-                        query = "SELECT p1.PdcCod, pd.PdcCntCli AS PdcRefCli, pd.PdcFecCre,
+                       query = "SELECT p1.PdcCod, pd.PdcCntCli AS PdcRefCli, pd.PdcFecCre,
                                         p1.PdcLin, p1.PdcCan, pd.PdcUsu AS Usuario,
                                         um.UMeFac, pd.PdcTipCaf AS TipCaf,
                                         pd.PdcPrePes AS PdcPrecioKilo
@@ -356,32 +510,39 @@ lotes_raw <- cargar_lotes_incremental(datos_previos)
 # Facturacion: query completa garantiza un registro por lote (no particionar)
 fact <- cargar_fact()
 
+# NOTA: se mantiene la consulta independiente de FACT (por cliente) tal
+# como estaba. Se detecto que esta consulta NO filtra facturas anuladas de
+# exportacion (FctLotAnu <> 'S'), a diferencia de cargar_fact() que si lo
+# hace. Consolidarla desde 'fact' + el mapeo lote->cliente eliminaria un
+# roundtrip completo a FCTFACN1/FCTFACC2, pero cambiaria el resultado por
+# esa inconsistencia de filtro. Se deja igual para no alterar comportamiento
+# sin confirmacion explicita.
 FACT <- bind_rows(ConsultaSistema("syscafe",
-                                   query = "SELECT F2.FctNit,
+                                  query = "SELECT F2.FctNit,
                                                    MIN(F2.FcnFec)          AS MinFecFact,
                                                    MAX(F2.FcnFec)          AS UltFecFact,
                                                    SUM(F1.FcnKilLot)       AS KilosFact,
                                                    SUM(F1.FcnSacLot)       AS SacosFact,
                                                    SUM(F1.FcnKilLot / 70.) AS SacFact70
                                            FROM FCTFACN1 F1
-                                           INNER JOIN FCTFACNA F2 ON F1.FcnNum = F2.FcnNum AND 
+                                           INNER JOIN FCTFACNA F2 ON F1.FcnNum = F2.FcnNum AND
                                                                      F1.CiaCod = F2.CiaCod
-                                           WHERE F1.CiaCod = 10 AND 
+                                           WHERE F1.CiaCod = 10 AND
                                                  F2.FcnEtd = 'C'
                                            GROUP BY F2.FctNit"),
                   ConsultaSistema("syscafe",
-                            query = "SELECT F2.FctNit,
+                                  query = "SELECT F2.FctNit,
                                             MIN(F2.FctFec)          AS MinFecFact,
                                             MAX(F2.FctFec)          AS UltFecFact,
                                             SUM(F1.FctKilLot)       AS KilosFact,
                                             SUM(F1.FctSacEmb)       AS SacosFact,
                                             SUM(F1.FctKilLot / 70.) AS SacFact70
                                      FROM FCTFACC2 F1
-                                     INNER JOIN FCTFACCA F2 ON F1.FctNum = F2.FctNum AND 
+                                     INNER JOIN FCTFACCA F2 ON F1.FctNum = F2.FctNum AND
                                                                F1.CiaCod = F2.CiaCod
                                      WHERE F1.CiaCod = 10
                                      GROUP BY F2.FctNit")
-                  ) %>%
+) %>%
   group_by(FctNit) %>%
   summarise(MinFecFact = min(MinFecFact, na.rm = TRUE),
             UltFecFact = max(UltFecFact, na.rm = TRUE),
@@ -392,44 +553,38 @@ FACT <- bind_rows(ConsultaSistema("syscafe",
   left_join(NCLIENTE %>%
               select(PerCod, PerRazSoc) %>%
               distinct(),
-            by = c("FctNit" = "PerCod")) %>% 
+            by = c("FctNit" = "PerCod")) %>%
   left_join(CREACION,  by = c("FctNit" = "PerCod") )
 
 # Construccion del cuadro de datos principal
 
-# adicion de lotes que estan en PYG y no el lotes_raw
+# Adicion de lotes que estan en PYG y no en lotes_raw
 lotes_pyg_faltantes <- CargarDatos("CRMNALMARLOT") %>%
   filter(FECFACTURA >= as.Date("2026-01-01")) %>%
   rename(CLLotCod = LOTE) %>%
-  anti_join(lotes_raw, by = "CLLotCod") %>% 
-  mutate(CLLinNegNo = ifelse(LINNEG== 10000, "CONVENCIONALES", "A LA MEDIDA")) %>% 
+  anti_join(lotes_raw, by = "CLLotCod") %>%
+  mutate(CLLinNegNo = ifelse(LINNEG== 10000, "CONVENCIONALES", "A LA MEDIDA")) %>%
   select(CLSucCod = SUCURSAL,
-         CLLotCod, 
+         CLLotCod,
          LinProCod = LINNEG,
          CLLinNegNo,
-         CLCliNit = CLIENTE, 
+         CLCliNit = CLIENTE,
          LinNegCod = LINNEG)
 
 data <- lotes_raw %>%
-  bind_rows(lotes_pyg_faltantes) %>% 
+  bind_rows(lotes_pyg_faltantes) %>%
   left_join(sucs, by = c("CLSucCod" = "SucCod")) %>%
   left_join(NITPPAL, by = c("CLCliNit" = "PerCod")) %>%
   mutate(CliNitPpal = ifelse(is.na(CliNitPpal), CLCliNit, CliNitPpal)) %>%
   left_join(NCLIENTE %>% filter(PerCod == CliNitPpal) %>% select(-PerCod),
             by = "CliNitPpal") %>%
+  left_join(NCLIENTE %>% select(PerCod, RazonSocialCliNit = PerRazSoc),
+            by = c("CLCliNit" = "PerCod")) %>%
   left_join(ped, by = c("CLPdcCod" = "PdcCod", "CLPdcLin" = "PdcLin")) %>%
   left_join(fact, by = "CLLotCod") %>%
   mutate(MarKilo = Margen / KilosFact) %>%
-  # Imputacion jerarquica de margen por kilo (4 niveles de agregacion)
-  group_by(CLCliNit, CLLinNegNo, LinProCod, MCCod, MrcCod) %>%
-  mutate(MarKilo = ifelse(is.na(MarKilo), mean(MarKilo, na.rm = TRUE), MarKilo)) %>%
-  group_by(CLLinNegNo, LinProCod, MCCod, MrcCod) %>%
-  mutate(MarKilo = ifelse(is.na(MarKilo), mean(MarKilo, na.rm = TRUE), MarKilo)) %>%
-  group_by(CLLinNegNo, LinProCod) %>%
-  mutate(MarKilo = ifelse(is.na(MarKilo), mean(MarKilo, na.rm = TRUE), MarKilo)) %>%
-  group_by(CLLinNegNo) %>%
-  mutate(MarKilo = ifelse(is.na(MarKilo), mean(MarKilo, na.rm = TRUE), MarKilo)) %>%
-  ungroup() %>%
+  # Imputacion en cascada de margen por kilo (7 niveles, ver niveles_margen)
+  imputar_cascada(valor_col = "MarKilo", niveles = niveles_margen) %>%
   mutate(SacosPYG = ifelse(is.na(SacosPYG), SacFact70, SacosPYG),
          Margen = ifelse(is.na(Margen),
                          MarKilo * (SacosPYG * 70),
@@ -445,35 +600,17 @@ data <- lotes_raw %>%
          PendDespachar = SacLote - pmax(SacDesp, 0),
          PendFacturar  = SacLote - pmax(PendDespachar, 0) - coalesce(SacosFact, 0)) %>%
   ungroup() %>%
-  select(CLSucCod, Sucursal, CLLotCod, FechaEmbarque, CLPdcCod, PdcPrecioKilo, 
+  select(CLSucCod, Sucursal, CLLotCod, FechaEmbarque, CLPdcCod, PdcPrecioKilo,
          PdcRefCli, PdcFecCre, CLPdcLin, CLPdcCntCl, Usuario, SacLote, FecAsignLote,
          CodOrdTril, FecOrdTril, SacProd, FecProd, CodDesp, FecDesp, SacDesp,
          FecFact = FecPrimerFact, KilosFact, SacosFact, SacFact70, Margen, SacosPYG, MarKilo, UMeFac, Kilos,
          LinNegCod, CLLinNegNo, LinProCod, MCCod, MrcCod, CLPdcFctAD, SacFact, CLPdcCanFa,
-         CliNitPpal, CLCliNit, PerRazSoc, CliCont, CliDir, CliDir1, CliTel, CliConCom, CliTelCom, 
+         CLCliNit, RazonSocialCliNit, CliNitPpal, PerRazSoc, CliCont, CliDir, CliDir1, CliTel, CliConCom, CliTelCom,
          CliEmlCom, CiuExtNom, CLLotSacXP, CLLotPenXD, CLLotDesXF, PendProducir, PendDespachar, PendFacturar) %>%
   mutate(across(where(is.character), ~ replace_na(., "SIN DATO")))
 
 
 # Procesamiento: 3. Segmentaciones (solo primer dia del mes) -------------------
-
-identificar_clientes_faltantes <- function(df_referencia, df_comparacion) {
-  df_referencia %>%
-    group_by(CliNitPpal, LinNegCod, Usuario) %>%
-    summarise(FecFact = max(FecFact), .groups = "drop") %>%
-    distinct() %>%
-    anti_join(
-      df_comparacion %>% select(CliNitPpal, LinNegCod) %>% distinct(),
-      by = join_by(CliNitPpal, LinNegCod)
-    )
-}
-generar_fechas_analisis <- function(fecha_inicio, fecha_fin = Sys.Date(), por = "month", ajuste = 0) {
-  fechas <- seq.Date(as.Date(fecha_inicio), PrimerDia(fecha_fin), by = por)
-  if (ajuste != 0L) fechas <- fechas + lubridate::days(ajuste)
-  fechas
-}
-personas      <- Consulta("SELECT * FROM CRMNALCLIENTE") %>%
-  mutate(FecProceso = as.Date(FecProceso))
 es_primer_dia <- lubridate::day(Sys.Date()) == 1L
 
 if (es_primer_dia) {
@@ -507,13 +644,37 @@ if (es_primer_dia) {
   EscribirDatos(seg, "CRMNALSEGR")
   
   # RFM por sacos y por margen ---
-  personas_rfm <- personas %>% 
-    select(FecProceso, LinNegCod, CliNitPpal, Segmento) %>% 
-    complete(LinNegCod, CliNitPpal, 
-             FecProceso = sort(data$FecFact %>% unique())) %>% 
+  personas_rfm <- personas %>%
+    select(FecProceso, LinNegCod, CliNitPpal, Segmento) %>%
+    complete(LinNegCod, CliNitPpal,
+             FecProceso = sort(data$FecFact %>% unique())) %>%
     group_by(LinNegCod, CliNitPpal) %>%
     fill(Segmento, .direction = "updown") %>%
     ungroup()
+  
+  # Segmentos Racafe cargados UNA sola vez y compartidos por ambas corridas
+  # de procesar_rfm (sacos y margen), en vez de reconsultarse dentro de cada una.
+  segmentos_racafe <- Consulta("select * from CRMNALSEGR") %>%
+    mutate(FecProceso = as.Date(FecProceso)) %>%
+    select(LinNegCod, CliNitPpal, FecProceso, SegmentoRacafe)
+  
+  # Definir segmentos para analisis (compartidos por ambas corridas de RFM)
+  segs  <- c("DETAL", "MEDIANO", "GRANDES")
+  segs2 <- c("CLIENTE A RECUPERAR", "CLIENTE")
+  segs3 <- c(10000, 21000)
+  
+  # Definir parametros de segmentacion RFM
+  segment_names <- c("CAMPEONES", "CLIENTES LEALES", "POTENCIALES LEALES",
+                     "NUEVOS CLIENTES", "PROMETEDORES", "NECESITAN ATENCIÓN",
+                     "A PUNTO DE DORMIR", "EN RIESGO", "NO PODEMOS PERDERLOS",
+                     "HIBERNANDO", "PERDIDOS")
+  
+  recency_lower   <- c(4, 2, 3, 4, 3, 3, 2, 1, 1, 2, 1)
+  recency_upper   <- c(5, 4, 5, 5, 4, 4, 3, 2, 1, 3, 1)
+  frequency_lower <- c(4, 3, 1, 1, 1, 3, 1, 2, 4, 2, 1)
+  frequency_upper <- c(5, 4, 3, 1, 1, 4, 2, 5, 5, 3, 1)
+  monetary_lower  <- c(4, 4, 1, 1, 1, 3, 1, 2, 4, 2, 1)
+  monetary_upper  <- c(5, 5, 3, 1, 1, 4, 2, 5, 5, 3, 1)
   
   procesar_rfm <- function(data_source, variable_revenue, tabla_destino) {
     print(paste("RFM", variable_revenue))
@@ -521,94 +682,57 @@ if (es_primer_dia) {
     # Preparar datos para RFM
     data_rfm <- data_source %>%
       left_join(personas_rfm,
-                by = c("CliNitPpal", "LinNegCod", "FecFact"="FecProceso")) %>% 
+                by = c("CliNitPpal", "LinNegCod", "FecFact"="FecProceso")) %>%
       filter(!is.na(FecFact),
              FecFact < PrimerDia(Sys.Date()),
              !is.na({{ variable_revenue }})
-      ) %>% 
-      select(customer_id = CliNitPpal, Segmento, LinNegCod, 
+      ) %>%
+      select(customer_id = CliNitPpal, Segmento, LinNegCod,
              order_date = FecFact, revenue = {{ variable_revenue }}
-      ) %>% 
+      ) %>%
       filter(!is.na(revenue))
     
-    # Fechas de análisis
+    # Fechas de analisis
     ana_dates <- generar_fechas_analisis("2020-02-01", ajuste = -1)
-    
-    # Cargar segmentos Racafé una sola vez
-    segmentos_racafe <- Consulta("select * from CRMNALSEGR") %>% 
-      mutate(FecProceso = as.Date(FecProceso)) %>% 
-      select(LinNegCod, CliNitPpal, FecProceso, SegmentoRacafe)
-    
-    # Definir segmentos para análisis
-    segs <- c("DETAL", "MEDIANO", "GRANDES")
-    segs2 <- c("CLIENTE A RECUPERAR", "CLIENTE")
-    segs3 <- c(10000, 21000)
-    
-    # Definir parámetros de segmentación RFM
-    segment_names <- c("CAMPEONES", "CLIENTES LEALES", "POTENCIALES LEALES",
-                       "NUEVOS CLIENTES", "PROMETEDORES", "NECESITAN ATENCIÓN",
-                       "A PUNTO DE DORMIR", "EN RIESGO", "NO PODEMOS PERDERLOS",
-                       "HIBERNANDO", "PERDIDOS")
-    
-    recency_lower   <- c(4, 2, 3, 4, 3, 3, 2, 1, 1, 2, 1)
-    recency_upper   <- c(5, 4, 5, 5, 4, 4, 3, 2, 1, 3, 1)
-    frequency_lower <- c(4, 3, 1, 1, 1, 3, 1, 2, 4, 2, 1)
-    frequency_upper <- c(5, 4, 3, 1, 1, 4, 2, 5, 5, 3, 1)
-    monetary_lower  <- c(4, 4, 1, 1, 1, 3, 1, 2, 4, 2, 1)
-    monetary_upper  <- c(5, 5, 3, 1, 1, 4, 2, 5, 5, 3, 1)
     
     # Procesar RFM para cada fecha
     rfm_results <- purrr::map_dfr(ana_dates, function(x) {
-      # Filtrar datos para la fecha actual
-      aux0 <- data_rfm %>% 
+      # Filtrar datos para la fecha actual, restringido a las combinaciones
+      # validas de segmento/segmento-racafe/linea (mismo universo que antes)
+      aux0 <- data_rfm %>%
         mutate(FecProceso = x + 1) %>%
         left_join(segmentos_racafe %>% filter(FecProceso == x + 1),
                   by = c("LinNegCod", "customer_id" = "CliNitPpal", "FecProceso")) %>%
         filter(order_date <= x,
-               order_date > x - years(1)) 
+               order_date > x - years(1),
+               Segmento %in% segs,
+               SegmentoRacafe %in% segs2,
+               LinNegCod %in% segs3)
       
-      # Procesar cada combinación de segmentos
-      purrr::map_dfr(segs, function(y) {
-        purrr::map_dfr(segs2, function(z) {
-          purrr::map_dfr(segs3, function(xx) {
-            # Filtrar por segmento
-            df <- aux0 %>% 
-              filter(
-                Segmento == y,
-                SegmentoRacafe == z,
-                LinNegCod == xx
-              )
-            
-            # Procesar RFM si hay datos
-            if (nrow(df) > 0) {
-              # Calcular tabla RFM
-              aux1 <- rfm_table_order(df, customer_id, order_date, revenue, x)
-              
-              # Segmentar clientes
-              segments <- rfm_segment(
-                aux1, segment_names, 
-                recency_lower, recency_upper, 
-                frequency_lower, frequency_upper,
-                monetary_lower, monetary_upper
-              )
-              
-              # Formatear resultados
-              segments %>%
-                mutate(
-                  FecProceso = x + days(1),
-                  segment = ifelse(segment == "Others", "OTROS", segment)
-                ) %>%
-                rename(
-                  SegmentoAnalitica = segment,
-                  CliNitPpal = customer_id
-                )
-            } else {
-              # Devolver dataframe vacío si no hay datos
-              data.frame()
-            }
-          })
-        })
-      })
+      if (nrow(aux0) == 0L) return(data.frame())
+      
+      # Un solo split por grupo (Segmento, SegmentoRacafe, LinNegCod) en vez
+      # de 3 bucles anidados de purrr::map_dfr re-filtrando el mismo objeto
+      aux0 %>%
+        group_by(Segmento, SegmentoRacafe, LinNegCod) %>%
+        group_modify(~ {
+          aux1 <- rfm_table_order(.x, customer_id, order_date, revenue, x)
+          rfm_segment(
+            aux1, segment_names,
+            recency_lower, recency_upper,
+            frequency_lower, frequency_upper,
+            monetary_lower, monetary_upper
+          ) %>%
+            mutate(
+              FecProceso = x + days(1),
+              segment = ifelse(segment == "Others", "OTROS", segment)
+            ) %>%
+            rename(
+              SegmentoAnalitica = segment,
+              CliNitPpal = customer_id
+            )
+        }) %>%
+        ungroup()
     })
     
     # Verificar clientes faltantes
@@ -623,21 +747,21 @@ if (es_primer_dia) {
   rfm_m <- procesar_rfm(data, variable_revenue = "Margen",    tabla_destino = "CRMNALRFMM")
   
   # CLV ---
-#   ana_dates_clv <- generar_fechas_analisis("2020-01-01", ajuste = -1L)
-#   
-#   if (length(ana_dates_clv) > 12L) {
-#     future::plan(future::multisession, workers = parallel::detectCores() - 1L)
-#     clv_results <- furrr::future_map_dfr(ana_dates_clv, procesar_clv, .progress = TRUE)
-#     future::plan(future::sequential)
-#   } else {
-#     clv_results <- purrr::map_dfr(ana_dates_clv, procesar_clv)
-#   }
-#   EscribirDatos(clv_results, "CRMNALCLV")
-#   
-#   message("Segmentaciones completadas: ", Sys.time())
-#   
-# } else {
-#   message("Segmentaciones omitidas (no es primer dia del mes): ", Sys.Date())
+  ana_dates_clv <- generar_fechas_analisis("2020-01-01", ajuste = -1L)
+  
+  if (length(ana_dates_clv) > 12L) {
+    future::plan(future::multisession, workers = parallel::detectCores() - 1L)
+    clv_results <- furrr::future_map_dfr(ana_dates_clv, procesar_clv, .progress = TRUE)
+    future::plan(future::sequential)
+  } else {
+    clv_results <- purrr::map_dfr(ana_dates_clv, procesar_clv)
+  }
+  EscribirDatos(clv_results, "CRMNALCLV")
+  
+  message("Segmentaciones completadas: ", Sys.time())
+  
+} else {
+  message("Segmentaciones omitidas (no es primer dia del mes): ", Sys.Date())
 }
 
 
