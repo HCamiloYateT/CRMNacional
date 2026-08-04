@@ -86,8 +86,19 @@ TablaDescartadosUI <- function(id) {
   tagList(
     useShinyjs(),
     fluidRow(
-      column(6, box(title = "Descartados por Etapa de Origen", width = 12, collapsible = FALSE, uiOutput(ns("kpi_etapa")))),
-      column(6, box(title = "Descartados por Motivo", width = 12, collapsible = FALSE, uiOutput(ns("kpi_motivo"))))
+      column(6, box(title = "Descartados por Etapa de Origen", width = 12, collapsible = FALSE, plotly::plotlyOutput(ns("kpi_etapa"), height = "220px"))),
+      column(6, box(title = "Descartados por Motivo", width = 12, collapsible = FALSE, plotly::plotlyOutput(ns("kpi_motivo"), height = "220px")))
+    ),
+    fluidRow(
+      column(6, box(title = "Descartados por Canal de Origen", width = 12, collapsible = FALSE, plotly::plotlyOutput(ns("kpi_canal"), height = "220px"))),
+      column(6, box(title = "Descartados por Asesor (solo los que fueron Lead)", width = 12, collapsible = FALSE, plotly::plotlyOutput(ns("kpi_asesor"), height = "220px")))
+    ),
+    fluidRow(
+      column(6, box(title = "Antigüedad desde el Descarte", width = 12, collapsible = FALSE, plotly::plotlyOutput(ns("kpi_antiguedad_descarte"), height = "220px"))),
+      column(6, box(title = "Motivo × Canal de Origen", width = 12, collapsible = FALSE,
+                    plotly::plotlyOutput(ns("kpi_motivo_canal"), height = "220px"),
+                    tags$p(style = "font-size:11px; color:#888; margin-top:6px;",
+                           "Nota: un análisis de descarte por rango de precio requeriría capturar un valor numérico de precio en el motivo de descarte, que hoy no existe en el catálogo — actualmente 'PRECIO' no es una categoría capturada; si se agrega, este cruce se puede extender.")))
     ),
     br(),
     TablaReactableUI(ns("tabla_descartados"), titulo = "Descartados",
@@ -104,46 +115,80 @@ TablaDescartados <- function(id, usr) {
     descartados_raw <- reactive({
       refresh_trigger()
       dat <- CargarDatos("CRMNALCONTACTO") %>% filter(Estado == "DESCARTADO")
+      lead_data <- tryCatch(CargarDatos("CONTACTOLEAD") %>% select(CodContacto, Asesor), error = function(e) data.frame(CodContacto = character(), Asesor = character()))
       
       if (!"EtapaPreDescarte" %in% names(dat)) dat$EtapaPreDescarte <- NA_character_
       
       dat %>%
         mutate(FechaHoraModi = as_datetime(FechaHoraModi),
-               EtapaPreDescarte = ifelse(is.na(EtapaPreDescarte), "CONTACTO", EtapaPreDescarte)) %>%
+               EtapaPreDescarte = ifelse(is.na(EtapaPreDescarte), "CONTACTO", EtapaPreDescarte),
+               DiasDesdeDescarte = as.numeric(difftime(Sys.time(), FechaHoraModi, units = "days")),
+               RangoAntiguedad = .rangos_antiguedad(DiasDesdeDescarte)) %>%
         left_join(obtener_ultimo_motivo_descarte(), by = "CodContacto") %>%
-        mutate(CategoriaMotivo = .categoria_motivo_descarte(Motivo))
+        left_join(lead_data, by = "CodContacto") %>%
+        mutate(CategoriaMotivo = .categoria_motivo_descarte(Motivo),
+               Origen = ifelse(is.na(Origen) | Origen == "", "SIN DATO", Origen))
     })
     
-    output$kpi_etapa <- renderUI({
-      dat <- descartados_raw() %>% count(EtapaPreDescarte, sort = TRUE)
-      tags$div(style = "display:flex; gap:10px; flex-wrap:wrap; justify-content:space-around;",
-               lapply(seq_len(nrow(dat)), function(i) .kpi_card(dat$EtapaPreDescarte[i], dat$n[i])))
+    output$kpi_etapa <- plotly::renderPlotly({
+      dat <- descartados_raw() %>% count(EtapaPreDescarte, sort = TRUE, name = "n")
+      .grafico_barras_horizontal(dat, "EtapaPreDescarte", "n", color = "#1C398E", titulo_x = "Descartados")
     })
     
-    output$kpi_motivo <- renderUI({
+    output$kpi_motivo <- plotly::renderPlotly({
+      dat <- descartados_raw() %>% mutate(CategoriaMotivo = ifelse(is.na(CategoriaMotivo), "SIN MOTIVO", CategoriaMotivo)) %>%
+        count(CategoriaMotivo, sort = TRUE, name = "n")
+      .grafico_barras_horizontal(dat, "CategoriaMotivo", "n", color = "#C11007", titulo_x = "Descartados")
+    })
+    
+    output$kpi_canal <- plotly::renderPlotly({
+      dat <- descartados_raw() %>% count(Origen, sort = TRUE, name = "n")
+      .grafico_barras_horizontal(dat, "Origen", "n", color = "#0F6E56", titulo_x = "Descartados")
+    })
+    
+    output$kpi_asesor <- plotly::renderPlotly({
+      dat <- descartados_raw() %>% filter(!is.na(Asesor)) %>% count(Asesor, sort = TRUE, name = "n")
+      .grafico_barras_horizontal(dat, "Asesor", "n", color = "#6f42c1", titulo_x = "Descartados")
+    })
+    
+    output$kpi_antiguedad_descarte <- plotly::renderPlotly({
+      dat <- descartados_raw() %>% count(RangoAntiguedad, .drop = FALSE, name = "n")
+      .grafico_barras_horizontal(dat, "RangoAntiguedad", "n", color = "#C8862A", titulo_x = "Descartados")
+    })
+    
+    output$kpi_motivo_canal <- plotly::renderPlotly({
       dat <- descartados_raw() %>%
         mutate(CategoriaMotivo = ifelse(is.na(CategoriaMotivo), "SIN MOTIVO", CategoriaMotivo)) %>%
-        count(CategoriaMotivo, sort = TRUE)
-      tags$div(style = "display:flex; gap:10px; flex-wrap:wrap; justify-content:space-around;",
-               lapply(seq_len(nrow(dat)), function(i) .kpi_card(dat$CategoriaMotivo[i], dat$n[i], color = "#C11007")))
+        count(Origen, CategoriaMotivo)
+      if (nrow(dat) == 0) return(plotly::config(plotly::plotly_empty(type = "heatmap"), displayModeBar = FALSE))
+      p <- plotly::plot_ly(
+        dat, x = ~CategoriaMotivo, y = ~Origen, z = ~n, type = "heatmap", colorscale = "Reds",
+        hovertemplate = "<b>%{y} — %{x}</b><br>Descartados: %{z}<extra></extra>"
+      ) %>%
+        plotly::layout(margin = list(l = 80, r = 20, t = 10, b = 60),
+                       paper_bgcolor = "rgba(0,0,0,0)", plot_bgcolor = "rgba(0,0,0,0)",
+                       hoverlabel = list(bgcolor = "#1A3C5E", font = list(color = "white", size = 12)))
+      plotly::config(p, displayModeBar = FALSE)
     })
     
     data_tabla <- reactive({
       descartados_raw() %>%
         mutate(Reactivar = CodContacto) %>%
         arrange(desc(FechaHoraModi)) %>%
-        select(Reactivar, CodContacto, PerRazSoc, PerCod, EtapaPreDescarte, Motivo, FechaHoraModi)
+        select(Reactivar, CodContacto, PerRazSoc, PerCod, EtapaPreDescarte, Motivo, Origen, DiasDesdeDescarte, FechaHoraModi)
     })
     
     mod_tabla <- TablaReactable(
       id = "tabla_descartados", data = data_tabla, columnas = NULL,
       col_specs = list(
         Reactivar        = .coldef_accion("Reactivar", "rotate-left", "#198754"),
-        CodContacto       = reactable::colDef(name = "Código", minWidth = 110),
+        CodContacto       = reactable::colDef(show = FALSE),
         PerRazSoc         = reactable::colDef(name = "Razón Social", minWidth = 180),
         PerCod            = reactable::colDef(name = "NIT", minWidth = 100),
         EtapaPreDescarte  = reactable::colDef(name = "Etapa de Origen", minWidth = 120),
         Motivo            = reactable::colDef(name = "Motivo", minWidth = 160),
+        Origen            = reactable::colDef(name = "Canal", minWidth = 100),
+        DiasDesdeDescarte = reactable::colDef(name = "Días desde Descarte", minWidth = 130, cell = function(v) round(v, 0)),
         FechaHoraModi     = reactable::colDef(name = "Fecha de Descarte", minWidth = 140, format = reactable::colFormat(datetime = TRUE))
       ),
       modo_seleccion = "celda", id_col = "CodContacto", cols_activos = "Reactivar",

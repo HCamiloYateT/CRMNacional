@@ -219,8 +219,8 @@ TablaLeadsUI <- function(id) {
     ),
     br(),
     fluidRow(
-      column(6, box(title = "Antigüedad en Lead", width = 12, collapsible = FALSE, uiOutput(ns("kpi_antiguedad")))),
-      column(6, box(title = "Leads por Asesor", width = 12, collapsible = FALSE, uiOutput(ns("kpi_asesor"))))
+      column(6, box(title = "Antigüedad en Lead", width = 12, collapsible = FALSE, plotly::plotlyOutput(ns("kpi_antiguedad"), height = "220px"))),
+      column(6, box(title = "Leads por Asesor", width = 12, collapsible = FALSE, plotly::plotlyOutput(ns("kpi_asesor"), height = "220px")))
     ),
     br(),
     TablaReactableUI(ns("tabla_leads"), titulo = "Leads",
@@ -257,34 +257,29 @@ TablaLeads <- function(id, usr) {
       dat
     })
     
-    output$kpi_antiguedad <- renderUI({
-      dat <- leads_filtrados() %>% count(RangoAntiguedad, .drop = FALSE)
-      tags$div(style = "display:flex; gap:10px; flex-wrap:wrap; justify-content:space-around;",
-               lapply(seq_len(nrow(dat)), function(i) .kpi_card(as.character(dat$RangoAntiguedad[i]), dat$n[i])))
+    output$kpi_antiguedad <- plotly::renderPlotly({
+      dat <- leads_filtrados() %>% count(RangoAntiguedad, .drop = FALSE, name = "n")
+      .grafico_barras_horizontal(dat, "RangoAntiguedad", "n", color = "#1C398E", titulo_x = "Leads")
     })
     
-    output$kpi_asesor <- renderUI({
-      dat <- leads_filtrados() %>% mutate(Asesor = ifelse(is.na(Asesor), "SIN ASIGNAR", Asesor)) %>% count(Asesor, sort = TRUE)
-      tags$div(style = "display:flex; gap:10px; flex-wrap:wrap; justify-content:space-around;",
-               lapply(seq_len(nrow(dat)), function(i) .kpi_card(dat$Asesor[i], dat$n[i], color = "#0F6E56")))
+    output$kpi_asesor <- plotly::renderPlotly({
+      dat <- leads_filtrados() %>% mutate(Asesor = ifelse(is.na(Asesor), "SIN ASIGNAR", Asesor)) %>% count(Asesor, sort = TRUE, name = "n")
+      .grafico_barras_horizontal(dat, "Asesor", "n", color = "#0F6E56", titulo_x = "Leads")
     })
     
     data_tabla <- reactive({
       leads_filtrados() %>%
-        mutate(Editar = CodContacto, Comentar = CodContacto, VincularNit = CodContacto, Descartar = CodContacto) %>%
+        mutate(Acciones = CodContacto) %>%
         arrange(desc(FechaEntradaEtapa)) %>%
-        select(Editar, Comentar, VincularNit, Descartar,
-               CodContacto, PerRazSoc, PerCod, Asesor, Segmento, LinNegocio, DiasEnLead, Estado)
+        select(Acciones, CodContacto, PerRazSoc, PerCod, Asesor, Segmento, LinNegocio, DiasEnLead, Estado)
     })
     
     mod_tabla <- TablaReactable(
       id = "tabla_leads", data = data_tabla, columnas = NULL,
       col_specs = list(
-        Editar      = .coldef_accion("Editar", "pen", "#1D4ED8"),
-        Comentar    = .coldef_accion("Comentar", "comment", "#6f42c1"),
-        VincularNit = .coldef_accion("Vincular NIT de facturación", "link", "#0F6E56"),
-        Descartar   = .coldef_accion("Descartar", "ban", "#C11007"),
-        CodContacto = reactable::colDef(name = "Código", minWidth = 110),
+        Acciones = .coldef_dropdown_acciones(ns, c(editar = "Editar", comentar = "Comentar",
+                                                   vincular = "Vincular NIT", descartar = "Descartar")),
+        CodContacto = reactable::colDef(show = FALSE),
         PerRazSoc   = reactable::colDef(name = "Razón Social", minWidth = 170),
         PerCod      = reactable::colDef(name = "NIT", minWidth = 100),
         Asesor      = reactable::colDef(name = "Asesor", minWidth = 100),
@@ -293,8 +288,7 @@ TablaLeads <- function(id, usr) {
         DiasEnLead  = reactable::colDef(name = "Días en Lead", minWidth = 100, cell = function(v) round(v, 0)),
         Estado      = reactable::colDef(name = "Sub Estado", minWidth = 100)
       ),
-      modo_seleccion = "celda", id_col = "CodContacto",
-      cols_activos = c("Editar", "Comentar", "VincularNit", "Descartar"),
+      modo_seleccion = "ninguno", id_col = "CodContacto",
       sortable = TRUE, searchable = TRUE, page_size = 20, compact = TRUE, mostrar_badge = FALSE, mostrar_nota = TRUE
     )
     
@@ -310,24 +304,25 @@ TablaLeads <- function(id, usr) {
     descartar_cod_rv <- reactiveVal(NULL)
     descartar_mod <- FormularioDescartarLead(id = "mod_descartar", usr = usr, cod_contacto = reactive(descartar_cod_rv()))
     
-    observeEvent(mod_tabla$seleccion(), {
-      sel <- mod_tabla$seleccion()
-      req(sel, sel$col %in% c("Editar", "Comentar", "VincularNit", "Descartar"))
+    observeEvent(input$accion_tabla, {
+      acc <- input$accion_tabla
+      req(acc$cod_contacto, acc$accion)
+      cod <- acc$cod_contacto
       
-      if (sel$col == "Editar") {
-        editar_cod_rv(sel$fila$CodContacto[[1]])
+      if (acc$accion == "editar") {
+        editar_cod_rv(cod)
         showModal(modalDialog(title = "Editar Lead", size = "xl", easyClose = TRUE, footer = modalButton("Cerrar"),
                               EditarContactoUI(ns("mod_editar"))))
-      } else if (sel$col == "Comentar") {
-        gestion_cod_rv(sel$fila$CodContacto[[1]])
+      } else if (acc$accion == "comentar") {
+        gestion_cod_rv(cod)
         showModal(modalDialog(title = "Gestión Comercial", size = "l", easyClose = TRUE, footer = modalButton("Cerrar"),
                               GestionContactoUI(ns("mod_gestion"))))
-      } else if (sel$col == "VincularNit") {
-        vincular_cod_rv(sel$fila$CodContacto[[1]])
+      } else if (acc$accion == "vincular") {
+        vincular_cod_rv(cod)
         showModal(modalDialog(title = "Vincular NIT", size = "m", easyClose = TRUE, footer = modalButton("Cerrar"),
                               FormularioVincularNitUI(ns("mod_vincular"))))
-      } else if (sel$col == "Descartar") {
-        descartar_cod_rv(sel$fila$CodContacto[[1]])
+      } else if (acc$accion == "descartar") {
+        descartar_cod_rv(cod)
         showModal(modalDialog(title = "Descartar Lead", size = "m", easyClose = TRUE, footer = modalButton("Cerrar"),
                               FormularioDescartarLeadUI(ns("mod_descartar"))))
       }

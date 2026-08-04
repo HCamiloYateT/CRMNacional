@@ -293,6 +293,46 @@ listar_recordatorios_contacto <- function(cod_contacto) {
   )
 }
 
+# Gráfico de barras horizontales para reemplazar las tarjetas KPI planas —
+# hover con conteo y etiqueta completa, útil cuando las categorías son largas
+.grafico_barras_horizontal <- function(dat, col_label, col_valor, color = "#1C398E", titulo_x = "Conteo") {
+  if (nrow(dat) == 0) return(plotly::config(plotly::plotly_empty(type = "bar"), displayModeBar = FALSE))
+  
+  dat <- dat[order(dat[[col_valor]]), ]
+  p <- plotly::plot_ly(
+    dat, x = dat[[col_valor]], y = factor(dat[[col_label]], levels = dat[[col_label]]),
+    type = "bar", orientation = "h", marker = list(color = color),
+    hovertemplate = paste0("<b>%{y}</b><br>", titulo_x, ": %{x}<extra></extra>")
+  ) %>%
+    plotly::layout(
+      margin = list(l = 10, r = 20, t = 10, b = 30), xaxis = list(title = titulo_x),
+      yaxis = list(title = ""), paper_bgcolor = "rgba(0,0,0,0)", plot_bgcolor = "rgba(0,0,0,0)",
+      hoverlabel = list(bgcolor = "#1A3C5E", font = list(color = "white", size = 12))
+    )
+  plotly::config(p, displayModeBar = FALSE)
+}
+
+# colDef de un menú desplegable de acciones por fila — reemplaza tener una
+# columna por cada botón; escalable a futuras acciones sin agregar columnas.
+# `ns` se captura por clausura desde el server que la invoca, y `opciones`
+# es un vector nombrado valor_accion = "Etiqueta visible"
+.coldef_dropdown_acciones <- function(ns, opciones) {
+  input_id <- ns("accion_tabla")
+  opts_html <- paste0('<option value="">Acciones</option>',
+                      paste0('<option value="', names(opciones), '">', opciones, '</option>', collapse = ""))
+  reactable::colDef(
+    name = "Acciones", minWidth = 130, html = TRUE, sortable = FALSE,
+    cell = function(value) {
+      sprintf(
+        paste0('<select class="form-select form-select-sm" style="font-size:11px; padding:2px 6px;" ',
+               'onchange="Shiny.setInputValue(\'%s\', {cod_contacto:\'%s\', accion:this.value, ts:Date.now()}, ',
+               '{priority:\'event\'}); this.selectedIndex=0;">%s</select>'),
+        input_id, value, opts_html
+      )
+    }
+  )
+}
+
 # Rangos de antigüedad en días, cortes fijos de negocio
 .rangos_antiguedad <- function(dias) {
   cut(dias, breaks = c(-Inf, 7, 15, 30, 60, Inf),
@@ -1417,12 +1457,12 @@ TablaContactosUI <- function(id) {
     ),
     br(),
     fluidRow(
-      column(6, box(title = "Antigüedad de Contactos", width = 12, collapsible = FALSE, uiOutput(ns("kpi_antiguedad")))),
-      column(6, box(title = "Contactos por Canal", width = 12, collapsible = FALSE, uiOutput(ns("kpi_canal"))))
+      column(6, box(title = "Antigüedad de Contactos", width = 12, collapsible = FALSE, plotly::plotlyOutput(ns("kpi_antiguedad"), height = "220px"))),
+      column(6, box(title = "Contactos por Canal", width = 12, collapsible = FALSE, plotly::plotlyOutput(ns("kpi_canal"), height = "220px")))
     ),
     br(),
     TablaReactableUI(ns("tabla_contactos"), titulo = "Contactos",
-                     footer = "Clic en un ícono de la fila para gestionar el contacto.", footer_tipo = "info")
+                     footer = "Usa el menú de Acciones de cada fila para gestionar el contacto.", footer_tipo = "info")
   )
 }
 
@@ -1451,40 +1491,31 @@ TablaContactos <- function(id, usr) {
       dat
     })
     
-    output$kpi_antiguedad <- renderUI({
-      dat <- contactos_filtrados() %>% count(RangoAntiguedad, .drop = FALSE)
-      tags$div(style = "display:flex; gap:10px; flex-wrap:wrap; justify-content:space-around;",
-               lapply(seq_len(nrow(dat)), function(i) .kpi_card(as.character(dat$RangoAntiguedad[i]), dat$n[i])))
+    output$kpi_antiguedad <- plotly::renderPlotly({
+      dat <- contactos_filtrados() %>% count(RangoAntiguedad, .drop = FALSE, name = "n")
+      .grafico_barras_horizontal(dat, "RangoAntiguedad", "n", color = "#1C398E", titulo_x = "Contactos")
     })
     
-    output$kpi_canal <- renderUI({
-      dat <- contactos_filtrados() %>% mutate(Origen = ifelse(is.na(Origen), "SIN DATO", Origen)) %>% count(Origen, sort = TRUE)
-      tags$div(style = "display:flex; gap:10px; flex-wrap:wrap; justify-content:space-around;",
-               lapply(seq_len(nrow(dat)), function(i) .kpi_card(dat$Origen[i], dat$n[i], color = "#0F6E56")))
+    output$kpi_canal <- plotly::renderPlotly({
+      dat <- contactos_filtrados() %>% mutate(Origen = ifelse(is.na(Origen), "SIN DATO", Origen)) %>% count(Origen, sort = TRUE, name = "n")
+      .grafico_barras_horizontal(dat, "Origen", "n", color = "#0F6E56", titulo_x = "Contactos")
     })
     
     data_tabla <- reactive({
       contactos_filtrados() %>%
-        mutate(
-          IdentificacionBadge = sapply(Identificacion, .badge_identificacion),
-          Editar = CodContacto, Comentar = CodContacto,
-          Ascender = CodContacto, MarcarProspecto = CodContacto, Descartar = CodContacto
-        ) %>%
+        mutate(IdentificacionBadge = sapply(Identificacion, .badge_identificacion), Acciones = CodContacto) %>%
         arrange(desc(FechaHoraCrea)) %>%
-        select(Editar, Comentar, Ascender, MarcarProspecto, Descartar,
-               CodContacto, PerRazSoc, PerCod, IdentificacionBadge, Origen, DetOrigen,
+        select(Acciones, CodContacto, PerRazSoc, PerCod, IdentificacionBadge, Origen, DetOrigen,
                AutorizaTD, FechaHoraCrea, DiasSinGestion, Estado)
     })
     
     mod_tabla <- TablaReactable(
       id = "tabla_contactos", data = data_tabla, columnas = NULL,
       col_specs = list(
-        Editar          = .coldef_accion("Editar", "pen", "#1D4ED8"),
-        Comentar        = .coldef_accion("Comentar", "comment", "#6f42c1"),
-        Ascender        = .coldef_accion("Ascender a Lead", "arrow-up", "#198754"),
-        MarcarProspecto = .coldef_accion("Marcar como Prospecto", "handshake", "#C8862A"),
-        Descartar       = .coldef_accion("Descartar", "ban", "#C11007"),
-        CodContacto = reactable::colDef(name = "Código", minWidth = 110),
+        Acciones = .coldef_dropdown_acciones(ns, c(editar = "Editar", comentar = "Comentar",
+                                                   ascender = "Ascender a Lead", prospecto = "Marcar como Prospecto",
+                                                   descartar = "Descartar")),
+        CodContacto = reactable::colDef(show = FALSE),
         PerRazSoc   = reactable::colDef(name = "Razón Social", minWidth = 180),
         PerCod      = reactable::colDef(name = "NIT", minWidth = 100),
         IdentificacionBadge = reactable::colDef(name = "Identificación", html = TRUE, minWidth = 130),
@@ -1495,8 +1526,7 @@ TablaContactos <- function(id, usr) {
         DiasSinGestion = reactable::colDef(name = "Días sin gestión", minWidth = 120, cell = function(v) round(v, 0)),
         Estado = reactable::colDef(name = "Sub Estado", minWidth = 100)
       ),
-      modo_seleccion = "celda", id_col = "CodContacto",
-      cols_activos = c("Editar", "Comentar", "Ascender", "MarcarProspecto", "Descartar"),
+      modo_seleccion = "ninguno", id_col = "CodContacto",
       sortable = TRUE, searchable = TRUE, page_size = 20, compact = TRUE, mostrar_badge = FALSE, mostrar_nota = TRUE
     )
     
@@ -1515,28 +1545,30 @@ TablaContactos <- function(id, usr) {
     editar_cod_rv     <- reactiveVal(NULL)
     EditarContacto(id = "mod_editar", usr = usr, cod_contacto = reactive(editar_cod_rv()))
     
-    observeEvent(mod_tabla$seleccion(), {
-      sel <- mod_tabla$seleccion()
-      req(sel, sel$col %in% c("Editar", "Comentar", "Ascender", "MarcarProspecto", "Descartar"))
+    # Enruta la acción elegida en el desplegable de cada fila
+    observeEvent(input$accion_tabla, {
+      acc <- input$accion_tabla
+      req(acc$cod_contacto, acc$accion)
+      cod <- acc$cod_contacto
       
-      if (sel$col == "Editar") {
-        editar_cod_rv(sel$fila$CodContacto[[1]])
+      if (acc$accion == "editar") {
+        editar_cod_rv(cod)
         showModal(modalDialog(title = "Editar Contacto", size = "xl", easyClose = TRUE, footer = modalButton("Cerrar"),
                               EditarContactoUI(ns("mod_editar"))))
-      } else if (sel$col == "Ascender") {
-        ascender_cod_rv(sel$fila$CodContacto[[1]])
+      } else if (acc$accion == "ascender") {
+        ascender_cod_rv(cod)
         showModal(modalDialog(title = "Ascender a Lead", size = "m", easyClose = TRUE, footer = modalButton("Cerrar"),
                               FormularioAscenderLeadUI(ns("mod_ascender"))))
-      } else if (sel$col == "MarcarProspecto") {
-        prospecto_cod_rv(sel$fila$CodContacto[[1]])
+      } else if (acc$accion == "prospecto") {
+        prospecto_cod_rv(cod)
         showModal(modalDialog(title = "Marcar como Prospecto", size = "m", easyClose = TRUE, footer = modalButton("Cerrar"),
                               FormularioConvertirProspectoUI(ns("mod_prospecto"))))
-      } else if (sel$col == "Descartar") {
-        descartar_cod_rv(sel$fila$CodContacto[[1]])
+      } else if (acc$accion == "descartar") {
+        descartar_cod_rv(cod)
         showModal(modalDialog(title = "Descartar Contacto", size = "m", easyClose = TRUE, footer = modalButton("Cerrar"),
                               FormularioDescartarContactoUI(ns("mod_descartar"))))
-      } else if (sel$col == "Comentar") {
-        gestion_cod_rv(sel$fila$CodContacto[[1]])
+      } else if (acc$accion == "comentar") {
+        gestion_cod_rv(cod)
         showModal(modalDialog(title = "Gestión Comercial", size = "l", easyClose = TRUE, footer = modalButton("Cerrar"),
                               GestionContactoUI(ns("mod_gestion"))))
       }

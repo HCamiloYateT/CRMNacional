@@ -42,6 +42,32 @@ listar_alianzas_prospecto <- function(cod_contacto) {
 }
 
 # Elimina una alianza (DELETE vía ReemplazarDatos con 0 filas)
+# Trae todas las alianzas activas, con razón social del Prospecto y del
+# Cliente aliado ya resueltas — base para el KPI "Prospectos por Alianza"
+listar_todas_las_alianzas <- function() {
+  alianzas <- tryCatch(CargarDatos("CRMNALPROSPECTOALIANZA"), error = function(e) data.frame(CodContacto = character(), CodClienteAliado = character()))
+  if (nrow(alianzas) == 0) return(alianzas %>% mutate(ClienteAliado = character()))
+  
+  clientes <- CargarDatos("CRMNALCONTACTO") %>% select(CodContacto, PerRazSoc, PerCod)
+  alianzas %>%
+    left_join(clientes, by = c("CodClienteAliado" = "CodContacto")) %>%
+    mutate(ClienteAliado = coalesce(PerRazSoc, PerCod, CodClienteAliado)) %>%
+    select(-PerRazSoc, -PerCod)
+}
+
+# Badges HTML con la razón social de cada Cliente aliado de un Prospecto —
+# reemplaza mostrar solo el conteo numérico de alianzas
+.badges_alianzas <- function(cod_contacto) {
+  alianzas <- listar_alianzas_prospecto(cod_contacto)
+  if (nrow(alianzas) == 0) return("<span style='color:#94A3B8; font-size:11px;'>Sin alianzas</span>")
+  paste(sapply(alianzas$ClienteAliado, function(nombre) {
+    as.character(tags$span(
+      style = "display:inline-block; margin:2px; padding:2px 8px; border-radius:10px; background:#F0E6D2; color:#C8862A; font-size:11px;",
+      nombre
+    ))
+  }), collapse = " ")
+}
+
 eliminar_alianza_prospecto <- function(id_alianza) {
   vacio <- CargarDatos("CRMNALPROSPECTOALIANZA") %>% filter(FALSE)
   ReemplazarDatos(vacio, "CRMNALPROSPECTOALIANZA", llaves = list(IdAlianza = id_alianza))
@@ -275,8 +301,8 @@ TablaProspectosUI <- function(id) {
     ),
     br(),
     fluidRow(
-      column(6, box(title = "Antigüedad en Prospecto", width = 12, collapsible = FALSE, uiOutput(ns("kpi_antiguedad")))),
-      column(6, box(title = "Prospectos por Número de Alianzas", width = 12, collapsible = FALSE, uiOutput(ns("kpi_alianzas"))))
+      column(6, box(title = "Antigüedad en Prospecto", width = 12, collapsible = FALSE, plotly::plotlyOutput(ns("kpi_antiguedad"), height = "220px"))),
+      column(6, box(title = "Prospectos por Alianza", width = 12, collapsible = FALSE, plotly::plotlyOutput(ns("kpi_alianzas"), height = "220px")))
     ),
     br(),
     TablaReactableUI(ns("tabla_prospectos"), titulo = "Prospectos",
@@ -312,45 +338,43 @@ TablaProspectos <- function(id, usr) {
       dat
     })
     
-    output$kpi_antiguedad <- renderUI({
-      dat <- prospectos_filtrados() %>% count(RangoAntiguedad, .drop = FALSE)
-      tags$div(style = "display:flex; gap:10px; flex-wrap:wrap; justify-content:space-around;",
-               lapply(seq_len(nrow(dat)), function(i) .kpi_card(as.character(dat$RangoAntiguedad[i]), dat$n[i])))
+    output$kpi_antiguedad <- plotly::renderPlotly({
+      dat <- prospectos_filtrados() %>% count(RangoAntiguedad, .drop = FALSE, name = "n")
+      .grafico_barras_horizontal(dat, "RangoAntiguedad", "n", color = "#1C398E", titulo_x = "Prospectos")
     })
     
-    output$kpi_alianzas <- renderUI({
-      dat <- prospectos_filtrados() %>%
-        mutate(RangoAlianzas = ifelse(NumAlianzas == 0, "Sin alianzas",
-                                      ifelse(NumAlianzas == 1, "1 alianza", "2 o más alianzas"))) %>%
-        count(RangoAlianzas, sort = TRUE)
-      tags$div(style = "display:flex; gap:10px; flex-wrap:wrap; justify-content:space-around;",
-               lapply(seq_len(nrow(dat)), function(i) .kpi_card(dat$RangoAlianzas[i], dat$n[i], color = "#C8862A")))
+    output$kpi_alianzas <- plotly::renderPlotly({
+      cods_activos <- prospectos_filtrados()$CodContacto
+      dat <- listar_todas_las_alianzas() %>%
+        filter(CodContacto %in% cods_activos) %>%
+        distinct(CodContacto, ClienteAliado) %>%
+        count(ClienteAliado, sort = TRUE, name = "n")
+      .grafico_barras_horizontal(dat, "ClienteAliado", "n", color = "#C8862A", titulo_x = "Prospectos vinculados")
     })
     
     data_tabla <- reactive({
       prospectos_filtrados() %>%
-        mutate(Editar = CodContacto, Comentar = CodContacto, Reclasificar = CodContacto, Descartar = CodContacto) %>%
+        rowwise() %>%
+        mutate(AlianzasBadges = .badges_alianzas(CodContacto)) %>%
+        ungroup() %>%
+        mutate(Acciones = CodContacto) %>%
         arrange(desc(FechaEntradaEtapa)) %>%
-        select(Editar, Comentar, Reclasificar, Descartar,
-               CodContacto, PerRazSoc, PerCod, NumAlianzas, DiasEnEtapa, Estado)
+        select(Acciones, CodContacto, PerRazSoc, PerCod, AlianzasBadges, DiasEnEtapa, Estado)
     })
     
     mod_tabla <- TablaReactable(
       id = "tabla_prospectos", data = data_tabla, columnas = NULL,
       col_specs = list(
-        Editar       = .coldef_accion("Editar", "pen", "#1D4ED8"),
-        Comentar     = .coldef_accion("Comentar", "comment", "#6f42c1"),
-        Reclasificar = .coldef_accion("Reclasificar a Lead", "arrow-up", "#198754"),
-        Descartar    = .coldef_accion("Descartar", "ban", "#C11007"),
-        CodContacto = reactable::colDef(name = "Código", minWidth = 110),
+        Acciones = .coldef_dropdown_acciones(ns, c(editar = "Editar", comentar = "Comentar",
+                                                   reclasificar = "Reclasificar a Lead", descartar = "Descartar")),
+        CodContacto = reactable::colDef(show = FALSE),
         PerRazSoc   = reactable::colDef(name = "Razón Social", minWidth = 180),
         PerCod      = reactable::colDef(name = "NIT", minWidth = 100),
-        NumAlianzas = reactable::colDef(name = "N° Alianzas", minWidth = 100),
+        AlianzasBadges = reactable::colDef(name = "Alianzas", html = TRUE, minWidth = 220),
         DiasEnEtapa = reactable::colDef(name = "Días en Prospecto", minWidth = 130, cell = function(v) round(v, 0)),
         Estado      = reactable::colDef(name = "Sub Estado", minWidth = 100)
       ),
-      modo_seleccion = "celda", id_col = "CodContacto",
-      cols_activos = c("Editar", "Comentar", "Reclasificar", "Descartar"),
+      modo_seleccion = "ninguno", id_col = "CodContacto",
       sortable = TRUE, searchable = TRUE, page_size = 20, compact = TRUE, mostrar_badge = FALSE, mostrar_nota = TRUE
     )
     
@@ -366,24 +390,25 @@ TablaProspectos <- function(id, usr) {
     descartar_cod_rv <- reactiveVal(NULL)
     descartar_mod <- FormularioDescartarProspecto(id = "mod_descartar", usr = usr, cod_contacto = reactive(descartar_cod_rv()))
     
-    observeEvent(mod_tabla$seleccion(), {
-      sel <- mod_tabla$seleccion()
-      req(sel, sel$col %in% c("Editar", "Comentar", "Reclasificar", "Descartar"))
+    observeEvent(input$accion_tabla, {
+      acc <- input$accion_tabla
+      req(acc$cod_contacto, acc$accion)
+      cod <- acc$cod_contacto
       
-      if (sel$col == "Editar") {
-        editar_cod_rv(sel$fila$CodContacto[[1]])
+      if (acc$accion == "editar") {
+        editar_cod_rv(cod)
         showModal(modalDialog(title = "Editar Prospecto", size = "xl", easyClose = TRUE, footer = modalButton("Cerrar"),
                               EditarContactoUI(ns("mod_editar"))))
-      } else if (sel$col == "Comentar") {
-        gestion_cod_rv(sel$fila$CodContacto[[1]])
+      } else if (acc$accion == "comentar") {
+        gestion_cod_rv(cod)
         showModal(modalDialog(title = "Gestión Comercial", size = "l", easyClose = TRUE, footer = modalButton("Cerrar"),
                               GestionContactoUI(ns("mod_gestion"))))
-      } else if (sel$col == "Reclasificar") {
-        reclasificar_cod_rv(sel$fila$CodContacto[[1]])
+      } else if (acc$accion == "reclasificar") {
+        reclasificar_cod_rv(cod)
         showModal(modalDialog(title = "Reclasificar a Lead", size = "m", easyClose = TRUE, footer = modalButton("Cerrar"),
                               FormularioReclasificarLeadUI(ns("mod_reclasificar"))))
-      } else if (sel$col == "Descartar") {
-        descartar_cod_rv(sel$fila$CodContacto[[1]])
+      } else if (acc$accion == "descartar") {
+        descartar_cod_rv(cod)
         showModal(modalDialog(title = "Descartar Prospecto", size = "m", easyClose = TRUE, footer = modalButton("Cerrar"),
                               FormularioDescartarProspectoUI(ns("mod_descartar"))))
       }

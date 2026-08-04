@@ -48,24 +48,27 @@ CSS_KANBAN_EMBUDO <- "
 .kpb-col-add:hover { background:rgba(255,255,255,.45); }
 .kpb-col-body { flex:1; overflow-y:auto; padding:10px; display:flex; flex-direction:column; gap:8px; }
 .kpb-col-vacio { display:flex; flex-direction:column; align-items:center; gap:6px; color:#adb5bd; font-size:.76rem; padding:22px 10px; }
-.kpb-card { background:#fff; border-radius:6px; padding:10px 12px; box-shadow:0 1px 3px rgba(0,0,0,.08); border-left:4px solid #dee2e6; transition:box-shadow .18s ease, transform .15s ease; }
+.kpb-card { background:#fff; border-radius:6px; padding:8px; box-shadow:0 1px 3px rgba(0,0,0,.08); border-left:4px solid #dee2e6; transition:box-shadow .18s ease, transform .15s ease; display:flex; gap:8px; }
 .kpb-card:hover { box-shadow:0 4px 14px rgba(0,0,0,.13); transform:translateY(-2px); }
 .kpb-card.gestion-warning { border-left-color:#d35400; }
 .kpb-card.gestion-critical { background:#fff8f8; border-left-color:#e74c3c !important; }
-.kpb-card-header { margin-bottom:7px; }
-.kpb-card-title { display:flex; align-items:center; gap:6px; margin-bottom:3px; }
-.kpb-empresa { font-weight:600; font-size:.79rem; color:#2c3e50; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:170px; display:inline-block; vertical-align:middle; }
+.kpb-card-content { flex:1; min-width:0; }
+.kpb-card-header { margin-bottom:5px; }
+.kpb-card-title { display:flex; flex-direction:column; gap:1px; margin-bottom:3px; }
+.kpb-empresa { font-weight:600; font-size:.79rem; color:#2c3e50; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:190px; display:block; }
+.kpb-nit { font-size:.68rem; color:#8e9aaf; }
 .kpb-card-meta { font-size:.72rem; color:#8e9aaf; }
-.kpb-card-body { border-top:1px solid #f0f2f5; padding-top:7px; margin-top:4px; display:flex; flex-direction:column; gap:3px; }
-.kpb-metric { font-size:.75rem; color:#5a6474; display:flex; align-items:center; gap:5px; }
-.kpb-card-sla { margin-top:7px; }
+.kpb-card-body { border-top:1px solid #f0f2f5; padding-top:5px; margin-top:3px; display:flex; flex-direction:column; gap:3px; }
+.kpb-metric { font-size:.73rem; color:#5a6474; display:flex; align-items:center; gap:5px; }
+.kpb-alianza-badge { display:inline-block; margin:1px 2px 1px 0; padding:1px 7px; border-radius:10px; background:#F0E6D2; color:#C8862A; font-size:.66rem; }
+.kpb-card-sla { margin-top:5px; }
 .kpb-sla { display:inline-flex; align-items:center; gap:4px; padding:2px 8px; border-radius:10px; font-size:.68rem; font-weight:600; }
 .kpb-sla-ok { background:#eafaf1; color:#1e8449; }
 .kpb-sla-warning { background:#fef5e7; color:#d35400; }
 .kpb-sla-critical { background:#fdedec; color:#c0392b; }
-.kpb-card-actions { display:flex; flex-wrap:wrap; gap:5px; margin-top:8px; padding-top:7px; border-top:1px solid #f0f2f5; }
-.kpb-btn-accion { border:none; border-radius:14px; padding:5px 11px; font-size:.7rem; font-weight:600; color:#fff; cursor:pointer; display:inline-flex; align-items:center; gap:5px; box-shadow:0 1px 2px rgba(0,0,0,.12); transition:filter .12s ease, transform .12s ease; }
-.kpb-btn-accion:hover { filter:brightness(0.9); transform:translateY(-1px); }
+.kpb-card-actions { display:flex; flex-direction:column; gap:4px; }
+.kpb-btn-accion { width:22px; height:22px; border-radius:50%; border:1px solid #eee; background:#fff; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:.62rem; box-shadow:0 1px 2px rgba(0,0,0,.08); transition:transform .12s ease, box-shadow .12s ease; padding:0; }
+.kpb-btn-accion:hover { transform:scale(1.12); box-shadow:0 2px 5px rgba(0,0,0,.18); }
 "
 
 JS_KANBAN_EMBUDO <- "
@@ -105,9 +108,9 @@ $(document).on('click', '[data-kanban-action]', function(e) {
 
 .btn_kanban <- function(cod_contacto, accion, label, icono) {
   tags$button(
-    class = "kpb-btn-accion", style = paste0("background:", .COLOR_ACCION_KANBAN[[accion]], ";"),
+    class = "kpb-btn-accion", title = label,
     `data-cod-contacto` = cod_contacto, `data-kanban-action` = accion,
-    tags$i(class = paste0("fas fa-", icono)), label
+    tags$i(class = paste0("fas fa-", icono), style = paste0("color:", .COLOR_ACCION_KANBAN[[accion]], "; font-size:.65rem;"))
   )
 }
 
@@ -138,14 +141,15 @@ cargar_pipeline_embudo <- function() {
                        if (fila$Etapa %in% c("CONTACTO", "LEAD") && fila$EstadoGestion == "critical") " gestion-critical"
                        else if (fila$Etapa %in% c("CONTACTO", "LEAD") && fila$EstadoGestion == "warning") " gestion-warning" else "")
   
-  identificador <- fila$PerRazSoc %||% fila$PerCod %||% fila$CodContacto
+  identificador <- fila$PerRazSoc %||% "SIN RAZÓN SOCIAL"
+  nit <- fila$PerCod %||% "SIN NIT"
   
   acciones <- switch(fila$Etapa,
                      "CONTACTO" = tagList(
                        .btn_kanban(fila$CodContacto, "editar", "Editar", "pen"),
                        .btn_kanban(fila$CodContacto, "gestionar", "Gestionar", "comment"),
-                       .btn_kanban(fila$CodContacto, "ascender", "Ascender", "arrow-up"),
-                       .btn_kanban(fila$CodContacto, "prospecto", "Prospecto", "handshake"),
+                       .btn_kanban(fila$CodContacto, "ascender", "Ascender a Lead", "arrow-up"),
+                       .btn_kanban(fila$CodContacto, "prospecto", "Marcar como Prospecto", "handshake"),
                        .btn_kanban(fila$CodContacto, "descartar", "Descartar", "ban")
                      ),
                      "LEAD" = tagList(
@@ -168,20 +172,43 @@ cargar_pipeline_embudo <- function() {
                      )
   )
   
+  # Cuerpo de la tarjeta, distinto según la información relevante de cada etapa
+  cuerpo <- switch(fila$Etapa,
+                   "CONTACTO" = tagList(
+                     if (!is.na(fila$Origen %||% NA)) div(class = "kpb-metric", tags$i(class = "fas fa-bullseye fa-xs"), " ", fila$Origen)
+                   ),
+                   "LEAD" = tagList(
+                     if (!is.na(fila$LinNegocio %||% NA)) div(class = "kpb-metric", tags$i(class = "fas fa-briefcase fa-xs"), " ", fila$LinNegocio),
+                     if (!is.na(fila$Segmento %||% NA)) div(class = "kpb-metric", tags$i(class = "fas fa-layer-group fa-xs"), " ", fila$Segmento),
+                     if (!is.na(fila$Asesor %||% NA)) div(class = "kpb-metric", tags$i(class = "fas fa-user fa-xs"), " ", fila$Asesor)
+                   ),
+                   "PROSPECTO" = {
+                     alianzas <- listar_alianzas_prospecto(fila$CodContacto)
+                     if (nrow(alianzas) == 0) {
+                       div(class = "kpb-metric", tags$i(class = "fas fa-handshake fa-xs"), " Sin alianzas")
+                     } else {
+                       div(lapply(alianzas$ClienteAliado, function(nombre) tags$span(class = "kpb-alianza-badge", nombre)))
+                     }
+                   },
+                   "CLIENTE" = tagList(
+                     if (!is.na(fila$LinNegocio %||% NA)) div(class = "kpb-metric", tags$i(class = "fas fa-briefcase fa-xs"), " ", fila$LinNegocio),
+                     if (!is.na(fila$Segmento %||% NA)) div(class = "kpb-metric", tags$i(class = "fas fa-layer-group fa-xs"), " ", fila$Segmento),
+                     if (!is.na(fila$Asesor %||% NA)) div(class = "kpb-metric", tags$i(class = "fas fa-user fa-xs"), " ", fila$Asesor)
+                   ),
+                   "DESCARTADO" = div(class = "kpb-metric", tags$i(class = "fas fa-rotate-left fa-xs"), " Origen: ", fila$EtapaPreDescarte)
+  )
+  
   div(
     class = clase_card, `data-cod-contacto` = fila$CodContacto,
-    div(class = "kpb-card-header",
-        div(class = "kpb-card-title", tags$span(class = "kpb-empresa", title = identificador, identificador)),
-        div(class = "kpb-card-meta", tags$i(class = "fas fa-hashtag fa-xs"), " ", fila$CodContacto)),
-    div(class = "kpb-card-body",
-        if (!is.na(fila$Origen %||% NA)) div(class = "kpb-metric", tags$i(class = "fas fa-bullseye fa-xs"), " ", fila$Origen),
-        if (!is.na(fila$Asesor %||% NA)) div(class = "kpb-metric", tags$i(class = "fas fa-user fa-xs"), " ", fila$Asesor),
-        if (fila$Etapa == "PROSPECTO") div(class = "kpb-metric", tags$i(class = "fas fa-handshake fa-xs"), " ",
-                                           fila$NumAlianzas, " alianza(s)"),
-        if (fila$Etapa == "DESCARTADO") div(class = "kpb-metric", tags$i(class = "fas fa-rotate-left fa-xs"),
-                                            " Origen: ", fila$EtapaPreDescarte)),
-    if (fila$Etapa %in% c("CONTACTO", "LEAD")) div(class = "kpb-card-sla", HTML(.html_badge_gestion(round(fila$DiasEnEtapa, 0)))),
-    div(class = "kpb-card-actions", acciones)
+    div(class = "kpb-card-actions", acciones),
+    div(class = "kpb-card-content",
+        div(class = "kpb-card-header",
+            div(class = "kpb-card-title",
+                tags$span(class = "kpb-empresa", title = identificador, identificador),
+                tags$span(class = "kpb-nit", nit))),
+        div(class = "kpb-card-body", cuerpo),
+        if (fila$Etapa %in% c("CONTACTO", "LEAD")) div(class = "kpb-card-sla", HTML(.html_badge_gestion(round(fila$DiasEnEtapa, 0))))
+    )
   )
 }
 

@@ -171,10 +171,10 @@ grafico_embudo <- function(metricas) {
                            "%% de la etapa anterior: %{percentPrevious}<extra></extra>")
   ) %>%
     plotly::layout(
+      yaxis = list(categoryorder = "array", categoryarray = etapas, autorange = "reversed"),
       margin = list(l = 100, r = 40, t = 20, b = 20), showlegend = FALSE,
       paper_bgcolor = "rgba(0,0,0,0)", plot_bgcolor = "rgba(0,0,0,0)",
-      yaxis = list(categoryorder = "array", categoryarray = rev(etapas)),
-      hoverlabel = list(bgcolor = "white", bordercolor = "#dee2e6", font = list(size = 12))
+      hoverlabel = list(bgcolor = "#1A3C5E", bordercolor = "#1A3C5E", font = list(color = "white", size = 12))
     )
   plotly::config(p, displayModeBar = FALSE)
 }
@@ -197,7 +197,7 @@ grafico_descartados <- function(dat_motivo_origen) {
       barmode = "stack", xaxis = list(title = "Motivo de descarte"), yaxis = list(title = "Descartados"),
       showlegend = TRUE, legend = list(orientation = "h", x = 0, y = -0.25, title = list(text = "Etapa de origen")),
       paper_bgcolor = "rgba(0,0,0,0)", plot_bgcolor = "rgba(0,0,0,0)",
-      hoverlabel = list(bgcolor = "white", bordercolor = "#dee2e6", font = list(size = 12))
+      hoverlabel = list(bgcolor = "#1A3C5E", bordercolor = "#1A3C5E", font = list(color = "white", size = 12))
     )
   plotly::config(p, displayModeBar = FALSE)
 }
@@ -328,7 +328,6 @@ EmbudoConversionUI <- function(id) {
                             tags$p(style = "font-size:11px; color:#888; margin-top:8px;", uiOutput(ns("nota_geo"))))))
   )
 }
-
 EmbudoConversion <- function(id) {
   moduleServer(id, function(input, output, session) {
     
@@ -364,7 +363,7 @@ EmbudoConversion <- function(id) {
     
     output$mapa_geo <- leaflet::renderLeaflet({
       puntos <- geo()$puntos_mapa
-      mapa <- leaflet::leaflet() %>% leaflet::addTiles()
+      mapa <- leaflet::leaflet() %>% leaflet::addProviderTiles(leaflet::providers$CartoDB.Positron)
       if (nrow(puntos) == 0) return(mapa %>% leaflet::setView(lng = -74.1, lat = 4.6, zoom = 5))
       mapa %>%
         leaflet::addCircleMarkers(
