@@ -97,12 +97,25 @@ calcular_metricas_embudo <- function() {
     mutate(TasaConversion = ifelse(Contactos > 0, Clientes / Contactos, 0)) %>%
     arrange(desc(TasaConversion))
   
-  # Conversión por asesor (desde etapa Lead en adelante)
-  conversion_por_asesor <- leads_dat %>%
-    mutate(EsCliente = CodContacto %in% contactos$CodContacto[contactos$Etapa == "CLIENTE"]) %>%
-    group_by(Asesor) %>%
-    summarise(Leads = n(), Clientes = sum(EsCliente), .groups = "drop") %>%
-    mutate(TasaConversion = ifelse(Leads > 0, Clientes / Leads, 0)) %>%
+  # Conversión por asesor — solo cubre registros que alguna vez tuvieron
+  # Asesor asignado (etapa Lead en adelante). Contactos y Prospectos no
+  # tienen Asesor en el modelo de datos (se asigna recién al ascender a
+  # Lead), así que no pueden atribuirse a un asesor específico aquí.
+  asesor_etapa <- leads_dat %>%
+    distinct(CodContacto, Asesor) %>%
+    left_join(contactos %>% select(CodContacto, Etapa), by = "CodContacto") %>%
+    filter(Etapa %in% c("LEAD", "CLIENTE", "DESCARTADO"))
+  
+  conversion_por_asesor <- asesor_etapa %>%
+    distinct(Asesor) %>%
+    mutate(
+      Leads = sapply(Asesor, function(a) sum(asesor_etapa$Asesor == a & asesor_etapa$Etapa == "LEAD")),
+      Clientes = sapply(Asesor, function(a) sum(asesor_etapa$Asesor == a & asesor_etapa$Etapa == "CLIENTE")),
+      Descartados = sapply(Asesor, function(a) sum(asesor_etapa$Asesor == a & asesor_etapa$Etapa == "DESCARTADO")),
+      Total = Leads + Clientes + Descartados,
+      TasaConversion = ifelse(Total > 0, Clientes / Total, 0),
+      TasaDescarte = ifelse(Total > 0, Descartados / Total, 0)
+    ) %>%
     arrange(desc(TasaConversion))
   
   # Motivos de descarte
@@ -167,11 +180,10 @@ grafico_embudo <- function(metricas) {
   p <- plotly::plot_ly(
     type = "funnel", y = etapas, x = valores, textinfo = "value+percent initial",
     marker = list(color = colores),
-    hovertemplate = paste0("<b>%{y}</b><br>Registros: %{x}<br>%% del total inicial: %{percentInitial}<br>",
-                           "%% de la etapa anterior: %{percentPrevious}<extra></extra>")
+    hovertemplate = paste0("<b>%{y}</b><br>Registros: %{x}<br>% del total inicial: %{percentInitial}<br>",
+                           "% de la etapa anterior: %{percentPrevious}<extra></extra>")
   ) %>%
     plotly::layout(
-      yaxis = list(categoryorder = "array", categoryarray = etapas, autorange = "reversed"),
       margin = list(l = 100, r = 40, t = 20, b = 20), showlegend = FALSE,
       paper_bgcolor = "rgba(0,0,0,0)", plot_bgcolor = "rgba(0,0,0,0)",
       hoverlabel = list(bgcolor = "#1A3C5E", bordercolor = "#1A3C5E", font = list(color = "white", size = 12))
@@ -191,10 +203,11 @@ grafico_descartados <- function(dat_motivo_origen) {
     colors = c("CONTACTO" = "#5a6474", "LEAD" = "#C8862A", "PROSPECTO" = "#6f42c1"),
     customdata = ~pct,
     hovertemplate = paste0("<b>%{fullData.name}</b><br>Motivo: %{x}<br>Descartados: %{y}<br>",
-                           "%% de ese motivo: %{customdata}%%<extra></extra>")
+                           "% de ese motivo: %{customdata}%<extra></extra>")
   ) %>%
     plotly::layout(
-      barmode = "stack", xaxis = list(title = "Motivo de descarte"), yaxis = list(title = "Descartados"),
+      barmode = "stack", xaxis = list(title = "", tickangle = -25, automargin = TRUE),
+      yaxis = list(title = "Descartados"), margin = list(b = 90),
       showlegend = TRUE, legend = list(orientation = "h", x = 0, y = -0.25, title = list(text = "Etapa de origen")),
       paper_bgcolor = "rgba(0,0,0,0)", plot_bgcolor = "rgba(0,0,0,0)",
       hoverlabel = list(bgcolor = "#1A3C5E", bordercolor = "#1A3C5E", font = list(color = "white", size = 12))
@@ -224,7 +237,7 @@ treemap_motivo <- function(dat) {
   p <- plotly::plot_ly(
     type = "treemap", labels = ~dat$CategoriaMotivo, parents = rep("", nrow(dat)), values = ~dat$n, customdata = ~dat$PctTexto,
     marker = list(colors = ~dat$n, colorscale = "Reds", showscale = TRUE, colorbar = list(title = "Casos")),
-    hovertemplate = paste0("<b>%{label}</b><br>Casos: %{value}<br>%% del total de descartes: %{customdata}<extra></extra>")
+    hovertemplate = paste0("<b>%{label}</b><br>Casos: %{value}<br>% del total de descartes: %{customdata}<extra></extra>")
   ) %>% plotly::layout(margin = list(t = 10, l = 10, r = 10, b = 10))
   plotly::config(p, displayModeBar = FALSE)
 }
@@ -317,8 +330,10 @@ EmbudoConversionUI <- function(id) {
       column(4, CajaModalUI(ns("kpi_clientes_30d")))
     ),
     h5("Por Asesor"),
-    fluidRow(column(12, box(width = 12, collapsible = FALSE, title = "Conversión Lead → Cliente por Asesor",
-                            reactable::reactableOutput(ns("tabla_asesor"))))),
+    fluidRow(column(12, box(width = 12, collapsible = FALSE, title = "Desempeño por Asesor (desde etapa Lead)",
+                            reactable::reactableOutput(ns("tabla_asesor")),
+                            tags$p(style = "font-size:11px; color:#888; margin-top:8px;",
+                                   "Nota: Contactos y Prospectos no tienen Asesor asignado en el modelo de datos (se asigna al ascender a Lead), por eso esta tabla solo cubre Leads, Clientes y Descartados atribuibles a un asesor.")))),
     h5("Georreferenciación"),
     fluidRow(column(12, box(width = 12, collapsible = FALSE, title = "Ubicación de Contactos por Departamento y Municipio",
                             fluidRow(
@@ -328,6 +343,7 @@ EmbudoConversionUI <- function(id) {
                             tags$p(style = "font-size:11px; color:#888; margin-top:8px;", uiOutput(ns("nota_geo"))))))
   )
 }
+
 EmbudoConversion <- function(id) {
   moduleServer(id, function(input, output, session) {
     
@@ -346,9 +362,11 @@ EmbudoConversion <- function(id) {
     
     output$tabla_asesor <- reactable::renderReactable({
       reactable::reactable(
-        metricas()$conversion_por_asesor %>% mutate(`Tasa Conversión` = paste0(round(TasaConversion * 100, 1), "%")) %>%
-          select(Asesor, Leads, Clientes, `Tasa Conversión`),
-        sortable = TRUE, compact = TRUE, searchable = FALSE, defaultSorted = "Clientes"
+        metricas()$conversion_por_asesor %>%
+          mutate(`Tasa a Cliente` = paste0(round(TasaConversion * 100, 1), "%"),
+                 `Tasa de Descarte` = paste0(round(TasaDescarte * 100, 1), "%")) %>%
+          select(Asesor, Leads, Clientes, Descartados, Total, `Tasa a Cliente`, `Tasa de Descarte`),
+        sortable = TRUE, compact = TRUE, searchable = FALSE, defaultSorted = "Total"
       )
     })
     
@@ -366,8 +384,9 @@ EmbudoConversion <- function(id) {
       mapa <- leaflet::leaflet() %>% leaflet::addProviderTiles(leaflet::providers$CartoDB.Positron)
       if (nrow(puntos) == 0) return(mapa %>% leaflet::setView(lng = -74.1, lat = 4.6, zoom = 5))
       mapa %>%
-        leaflet::addCircleMarkers(
-          data = puntos, lng = ~lng, lat = ~lat, radius = 6, color = "#C8862A", fillOpacity = 0.7, stroke = FALSE,
+        leaflet::addMarkers(
+          data = puntos, lng = ~lng, lat = ~lat,
+          clusterOptions = leaflet::markerClusterOptions(),
           popup = ~paste0("<b>", ifelse(is.na(PerRazSoc), PerCod, PerRazSoc), "</b><br>", Mpio, ", ", Depto, "<br>", ifelse(is.na(Direccion), "", Direccion))
         ) %>%
         leaflet::fitBounds(lng1 = min(puntos$lng), lat1 = min(puntos$lat), lng2 = max(puntos$lng), lat2 = max(puntos$lat))

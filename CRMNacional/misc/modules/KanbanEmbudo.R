@@ -66,8 +66,8 @@ CSS_KANBAN_EMBUDO <- "
 .kpb-sla-ok { background:#eafaf1; color:#1e8449; }
 .kpb-sla-warning { background:#fef5e7; color:#d35400; }
 .kpb-sla-critical { background:#fdedec; color:#c0392b; }
-.kpb-card-actions { display:flex; flex-direction:column; gap:4px; }
-.kpb-btn-accion { width:22px; height:22px; border-radius:50%; border:1px solid #eee; background:#fff; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:.62rem; box-shadow:0 1px 2px rgba(0,0,0,.08); transition:transform .12s ease, box-shadow .12s ease; padding:0; }
+.kpb-card-actions { width:30px; flex-shrink:0; background:#eef1f5; border-radius:8px; padding:5px 3px; display:flex; flex-direction:column; gap:5px; align-items:center; }
+.kpb-btn-accion { width:22px; height:22px; flex-shrink:0; border-radius:50%; border:1px solid #eee; background:#fff; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:.62rem; box-shadow:0 1px 2px rgba(0,0,0,.08); transition:transform .12s ease, box-shadow .12s ease; padding:0; }
 .kpb-btn-accion:hover { transform:scale(1.12); box-shadow:0 2px 5px rgba(0,0,0,.18); }
 "
 
@@ -103,7 +103,8 @@ $(document).on('click', '[data-kanban-action]', function(e) {
 
 .COLOR_ACCION_KANBAN <- c(
   editar = "#1D4ED8", gestionar = "#6f42c1", ascender = "#198754", prospecto = "#C8862A",
-  vincular = "#0F6E56", reclasificar = "#198754", descartar = "#C11007", reactivar = "#198754"
+  vincular = "#0F6E56", reclasificar = "#198754", oportunidad = "#C8862A",
+  descartar = "#C11007", reactivar = "#198754"
 )
 
 .btn_kanban <- function(cod_contacto, accion, label, icono) {
@@ -150,24 +151,30 @@ cargar_pipeline_embudo <- function() {
                        .btn_kanban(fila$CodContacto, "gestionar", "Gestionar", "comment"),
                        .btn_kanban(fila$CodContacto, "ascender", "Ascender a Lead", "arrow-up"),
                        .btn_kanban(fila$CodContacto, "prospecto", "Marcar como Prospecto", "handshake"),
+                       .btn_kanban(fila$CodContacto, "oportunidad", "Crear Oportunidad", "bullseye"),
                        .btn_kanban(fila$CodContacto, "descartar", "Descartar", "ban")
                      ),
                      "LEAD" = tagList(
                        .btn_kanban(fila$CodContacto, "editar", "Editar", "pen"),
                        .btn_kanban(fila$CodContacto, "gestionar", "Gestionar", "comment"),
                        .btn_kanban(fila$CodContacto, "vincular", "Vincular NIT", "link"),
+                       .btn_kanban(fila$CodContacto, "oportunidad", "Crear Oportunidad", "bullseye"),
                        .btn_kanban(fila$CodContacto, "descartar", "Descartar", "ban")
                      ),
                      "PROSPECTO" = tagList(
                        .btn_kanban(fila$CodContacto, "editar", "Editar", "pen"),
                        .btn_kanban(fila$CodContacto, "gestionar", "Gestionar", "comment"),
                        .btn_kanban(fila$CodContacto, "reclasificar", "Reclasificar a Lead", "arrow-up"),
+                       .btn_kanban(fila$CodContacto, "oportunidad", "Crear Oportunidad", "bullseye"),
                        .btn_kanban(fila$CodContacto, "descartar", "Descartar", "ban")
                      ),
                      "CLIENTE" = tagList(
-                       .btn_kanban(fila$CodContacto, "gestionar", "Gestionar", "comment")
+                       .btn_kanban(fila$CodContacto, "editar", "Editar", "pen"),
+                       .btn_kanban(fila$CodContacto, "gestionar", "Gestionar", "comment"),
+                       .btn_kanban(fila$CodContacto, "oportunidad", "Crear Oportunidad", "bullseye")
                      ),
                      "DESCARTADO" = tagList(
+                       .btn_kanban(fila$CodContacto, "editar", "Editar", "pen"),
                        .btn_kanban(fila$CodContacto, "reactivar", "Reactivar", "rotate-left")
                      )
   )
@@ -353,6 +360,13 @@ KanbanEmbudo <- function(id, usr) {
     descartar_pr_mod  <- FormularioDescartarProspecto(id = "mod_descartar_pr", usr = usr, cod_contacto = reactive(descartar_pr_rv()))
     reactivar_mod     <- FormularioReactivar(id = "mod_reactivar", usr = usr, cod_contacto = reactive(reactivar_cod_rv()))
     
+    # Crea Oportunidad reutilizando el módulo compartido — mismo patrón usado en las tablas por etapa
+    dd_oportunidad <- reactiveVal(NULL)
+    oportunidad_trigger <- reactiveVal(0)
+    FormularioOportunidad("mod_oportunidad", dd_data = reactive(dd_oportunidad()),
+                          dat = reactive(data), usr = usr, trigger_update = oportunidad_trigger,
+                          tipo_cliente_default = reactive("CONTACTO"))
+    
     contacto_mod <- FormularioContacto(id = "mod_nuevo_contacto", usr = usr, cod_contacto = reactive(""))
     
     observeEvent(input$btn_nuevo_contacto, {
@@ -410,11 +424,17 @@ KanbanEmbudo <- function(id, usr) {
         reactivar_cod_rv(cod)
         showModal(modalDialog(title = "Reactivar Registro", size = "m", easyClose = TRUE, footer = modalButton("Cerrar"),
                               FormularioReactivarUI(ns("mod_reactivar"))))
+      } else if (acc$accion == "oportunidad") {
+        dd_oportunidad(list(fila_completa = list(PerRazSoc = fila$PerRazSoc[[1]])))
+        showModal(modalDialog(title = paste0("Nueva Oportunidad — ", fila$PerRazSoc[[1]] %||% fila$PerCod[[1]]), size = "l",
+                              easyClose = TRUE, footer = modalButton("Cerrar"),
+                              FormularioOportunidadUI(ns("mod_oportunidad"))))
       }
     })
     
+    observeEvent(oportunidad_trigger(), { removeModal() }, ignoreInit = TRUE)
+    
     observeEvent(ascender_mod$n(), { removeModal(); refresh_trigger(isolate(refresh_trigger()) + 1) })
-    observeEvent(prospecto_mod$n(), { removeModal(); refresh_trigger(isolate(refresh_trigger()) + 1) })
     observeEvent(reclasificar_mod$n(), { removeModal(); refresh_trigger(isolate(refresh_trigger()) + 1) })
     observeEvent(vincular_mod$n(), { removeModal(); refresh_trigger(isolate(refresh_trigger()) + 1) })
     observeEvent(descartar_ct_mod$n(), { removeModal(); refresh_trigger(isolate(refresh_trigger()) + 1) })

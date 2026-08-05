@@ -1349,6 +1349,7 @@ server <- function(input, output, session) {
   TablaContactos("EmbudoContactos", usr = usuario)
   TablaProspectos("EmbudoProspectos", usr = usuario)
   TablaLeads("EmbudoLeads", usr = usuario)
+  TablaClientes("EmbudoClientes", usr = usuario)
   TablaDescartados("EmbudoDescartados", usr = usuario)
   KanbanEmbudo("EmbudoKanban", usr = usuario)
   EmbudoConversion("EmbudoConversion")

@@ -278,7 +278,8 @@ TablaLeads <- function(id, usr) {
       id = "tabla_leads", data = data_tabla, columnas = NULL,
       col_specs = list(
         Acciones = .coldef_dropdown_acciones(ns, c(editar = "Editar", comentar = "Comentar",
-                                                   vincular = "Vincular NIT", descartar = "Descartar")),
+                                                   vincular = "Vincular NIT", oportunidad = "Crear Oportunidad",
+                                                   descartar = "Descartar")),
         CodContacto = reactable::colDef(show = FALSE),
         PerRazSoc   = reactable::colDef(name = "Razón Social", minWidth = 170),
         PerCod      = reactable::colDef(name = "NIT", minWidth = 100),
@@ -304,6 +305,13 @@ TablaLeads <- function(id, usr) {
     descartar_cod_rv <- reactiveVal(NULL)
     descartar_mod <- FormularioDescartarLead(id = "mod_descartar", usr = usr, cod_contacto = reactive(descartar_cod_rv()))
     
+    # Crea Oportunidad reutilizando el módulo compartido — mismo patrón de Contactos/Prospectos
+    dd_oportunidad <- reactiveVal(NULL)
+    oportunidad_trigger <- reactiveVal(0)
+    FormularioOportunidad("mod_oportunidad", dd_data = reactive(dd_oportunidad()),
+                          dat = reactive(data), usr = usr, trigger_update = oportunidad_trigger,
+                          tipo_cliente_default = reactive("LEAD"))
+    
     observeEvent(input$accion_tabla, {
       acc <- input$accion_tabla
       req(acc$cod_contacto, acc$accion)
@@ -325,8 +333,17 @@ TablaLeads <- function(id, usr) {
         descartar_cod_rv(cod)
         showModal(modalDialog(title = "Descartar Lead", size = "m", easyClose = TRUE, footer = modalButton("Cerrar"),
                               FormularioDescartarLeadUI(ns("mod_descartar"))))
+      } else if (acc$accion == "oportunidad") {
+        fila <- data_tabla() %>% filter(CodContacto == cod)
+        req(nrow(fila) > 0)
+        dd_oportunidad(list(fila_completa = list(PerRazSoc = fila$PerRazSoc[[1]])))
+        showModal(modalDialog(title = paste0("Nueva Oportunidad — ", fila$PerRazSoc[[1]]), size = "l",
+                              easyClose = TRUE, footer = modalButton("Cerrar"),
+                              FormularioOportunidadUI(ns("mod_oportunidad"))))
       }
     })
+    
+    observeEvent(oportunidad_trigger(), { removeModal() }, ignoreInit = TRUE)
     
     observeEvent(vincular_mod$n(), { removeModal(); refresh_trigger(isolate(refresh_trigger()) + 1) })
     observeEvent(descartar_mod$n(), { removeModal(); refresh_trigger(isolate(refresh_trigger()) + 1) })

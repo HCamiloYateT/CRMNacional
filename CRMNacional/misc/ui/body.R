@@ -76,6 +76,7 @@ body <- bs4DashBody(
     bs4TabItem(tabName = "EC_Contactos", TablaContactosUI("EmbudoContactos")),
     bs4TabItem(tabName = "EC_Prospectos", TablaProspectosUI("EmbudoProspectos")),
     bs4TabItem(tabName = "EC_Leads", TablaLeadsUI("EmbudoLeads")),
+    bs4TabItem(tabName = "EC_Clientes", TablaClientesUI("EmbudoClientes")),
     bs4TabItem(tabName = "EC_Descartados", TablaDescartadosUI("EmbudoDescartados")),
     bs4TabItem(tabName = "EC_Embudo", EmbudoConversionUI("EmbudoConversion")),
     # Consulta Individual

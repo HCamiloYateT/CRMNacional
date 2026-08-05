@@ -318,13 +318,15 @@ listar_recordatorios_contacto <- function(cod_contacto) {
 # es un vector nombrado valor_accion = "Etiqueta visible"
 .coldef_dropdown_acciones <- function(ns, opciones) {
   input_id <- ns("accion_tabla")
-  opts_html <- paste0('<option value="">Acciones</option>',
+  opts_html <- paste0('<option value="" disabled selected>Elegir acción…</option>',
                       paste0('<option value="', names(opciones), '">', opciones, '</option>', collapse = ""))
   reactable::colDef(
-    name = "Acciones", minWidth = 130, html = TRUE, sortable = FALSE,
+    name = "", minWidth = 150, html = TRUE, sortable = FALSE,
     cell = function(value) {
       sprintf(
-        paste0('<select class="form-select form-select-sm" style="font-size:11px; padding:2px 6px;" ',
+        paste0('<select style="border:none; border-radius:14px; background:#F0F2F5; color:#5a6474; ',
+               'font-size:11px; padding:4px 10px; width:100%%; cursor:pointer; outline:none; ',
+               'appearance:none; -webkit-appearance:none;" ',
                'onchange="Shiny.setInputValue(\'%s\', {cod_contacto:\'%s\', accion:this.value, ts:Date.now()}, ',
                '{priority:\'event\'}); this.selectedIndex=0;">%s</select>'),
         input_id, value, opts_html
@@ -1347,7 +1349,6 @@ EditarContactoUI <- function(id) {
     tabPanel("Potencial de Negocio", br(), TabPotencialUI(ns("tab_potencial")))
   )
 }
-
 EditarContacto <- function(id, usr, cod_contacto) {
   moduleServer(id, function(input, output, session) {
     FormularioContacto(id = "tab_identificacion", usr = usr, cod_contacto = cod_contacto)
@@ -1514,7 +1515,7 @@ TablaContactos <- function(id, usr) {
       col_specs = list(
         Acciones = .coldef_dropdown_acciones(ns, c(editar = "Editar", comentar = "Comentar",
                                                    ascender = "Ascender a Lead", prospecto = "Marcar como Prospecto",
-                                                   descartar = "Descartar")),
+                                                   oportunidad = "Crear Oportunidad", descartar = "Descartar")),
         CodContacto = reactable::colDef(show = FALSE),
         PerRazSoc   = reactable::colDef(name = "Razón Social", minWidth = 180),
         PerCod      = reactable::colDef(name = "NIT", minWidth = 100),
@@ -1545,6 +1546,12 @@ TablaContactos <- function(id, usr) {
     editar_cod_rv     <- reactiveVal(NULL)
     EditarContacto(id = "mod_editar", usr = usr, cod_contacto = reactive(editar_cod_rv()))
     
+    dd_oportunidad <- reactiveVal(NULL)
+    oportunidad_trigger <- reactiveVal(0)
+    FormularioOportunidad("mod_oportunidad", dd_data = reactive(dd_oportunidad()),
+                          dat = reactive(data), usr = usr, trigger_update = oportunidad_trigger,
+                          tipo_cliente_default = reactive("CONTACTO"))
+    
     # Enruta la acción elegida en el desplegable de cada fila
     observeEvent(input$accion_tabla, {
       acc <- input$accion_tabla
@@ -1571,12 +1578,20 @@ TablaContactos <- function(id, usr) {
         gestion_cod_rv(cod)
         showModal(modalDialog(title = "Gestión Comercial", size = "l", easyClose = TRUE, footer = modalButton("Cerrar"),
                               GestionContactoUI(ns("mod_gestion"))))
+      } else if (acc$accion == "oportunidad") {
+        fila <- data_tabla() %>% filter(CodContacto == cod)
+        req(nrow(fila) > 0)
+        dd_oportunidad(list(fila_completa = list(PerRazSoc = fila$PerRazSoc[[1]])))
+        showModal(modalDialog(title = paste0("Nueva Oportunidad — ", fila$PerRazSoc[[1]]), size = "l",
+                              easyClose = TRUE, footer = modalButton("Cerrar"),
+                              FormularioOportunidadUI(ns("mod_oportunidad"))))
       }
     })
     
     observeEvent(ascender_mod$n(), { removeModal(); refresh_trigger(isolate(refresh_trigger()) + 1) })
     observeEvent(prospecto_mod$n(), { removeModal(); refresh_trigger(isolate(refresh_trigger()) + 1) })
     observeEvent(descartar_mod$n(), { removeModal(); refresh_trigger(isolate(refresh_trigger()) + 1) })
+    observeEvent(oportunidad_trigger(), { removeModal() }, ignoreInit = TRUE)
     
     contacto_mod <- FormularioContacto(id = "mod_nuevo_contacto", usr = usr, cod_contacto = reactive(""))
     

@@ -95,10 +95,13 @@ TablaDescartadosUI <- function(id) {
     ),
     fluidRow(
       column(6, box(title = "Antigüedad desde el Descarte", width = 12, collapsible = FALSE, plotly::plotlyOutput(ns("kpi_antiguedad_descarte"), height = "220px"))),
-      column(6, box(title = "Motivo × Canal de Origen", width = 12, collapsible = FALSE,
-                    plotly::plotlyOutput(ns("kpi_motivo_canal"), height = "220px"),
-                    tags$p(style = "font-size:11px; color:#888; margin-top:6px;",
-                           "Nota: un análisis de descarte por rango de precio requeriría capturar un valor numérico de precio en el motivo de descarte, que hoy no existe en el catálogo — actualmente 'PRECIO' no es una categoría capturada; si se agrega, este cruce se puede extender.")))
+      column(6, box(title = "Días Promedio hasta el Descarte (por Etapa)", width = 12, collapsible = FALSE, plotly::plotlyOutput(ns("kpi_tiempo_descarte"), height = "220px")))
+    ),
+    fluidRow(
+      column(12, box(title = "Motivo × Canal de Origen", width = 12, collapsible = FALSE,
+                     plotly::plotlyOutput(ns("kpi_motivo_canal"), height = "220px"),
+                     tags$p(style = "font-size:11px; color:#888; margin-top:6px;",
+                            "Nota: un análisis de descarte por rango de precio requeriría capturar un valor numérico de precio en el motivo de descarte, que hoy no existe en el catálogo — actualmente 'PRECIO' no es una categoría capturada; si se agrega, este cruce se puede extender.")))
     ),
     br(),
     TablaReactableUI(ns("tabla_descartados"), titulo = "Descartados",
@@ -123,11 +126,19 @@ TablaDescartados <- function(id, usr) {
         mutate(FechaHoraModi = as_datetime(FechaHoraModi),
                EtapaPreDescarte = ifelse(is.na(EtapaPreDescarte), "CONTACTO", EtapaPreDescarte),
                DiasDesdeDescarte = as.numeric(difftime(Sys.time(), FechaHoraModi, units = "days")),
+               DiasHastaDescarte = as.numeric(difftime(FechaHoraModi, as_datetime(FechaHoraCrea), units = "days")),
                RangoAntiguedad = .rangos_antiguedad(DiasDesdeDescarte)) %>%
         left_join(obtener_ultimo_motivo_descarte(), by = "CodContacto") %>%
         left_join(lead_data, by = "CodContacto") %>%
         mutate(CategoriaMotivo = .categoria_motivo_descarte(Motivo),
                Origen = ifelse(is.na(Origen) | Origen == "", "SIN DATO", Origen))
+    })
+    
+    output$kpi_tiempo_descarte <- plotly::renderPlotly({
+      dat <- descartados_raw() %>%
+        group_by(EtapaPreDescarte) %>%
+        summarise(n = round(mean(DiasHastaDescarte, na.rm = TRUE), 1), .groups = "drop")
+      .grafico_barras_horizontal(dat, "EtapaPreDescarte", "n", color = "#5a6474", titulo_x = "Días promedio hasta el descarte")
     })
     
     output$kpi_etapa <- plotly::renderPlotly({
@@ -173,35 +184,36 @@ TablaDescartados <- function(id, usr) {
     
     data_tabla <- reactive({
       descartados_raw() %>%
-        mutate(Reactivar = CodContacto) %>%
+        mutate(Acciones = CodContacto) %>%
         arrange(desc(FechaHoraModi)) %>%
-        select(Reactivar, CodContacto, PerRazSoc, PerCod, EtapaPreDescarte, Motivo, Origen, DiasDesdeDescarte, FechaHoraModi)
+        select(Acciones, CodContacto, PerRazSoc, PerCod, EtapaPreDescarte, Motivo, Origen, DiasHastaDescarte, DiasDesdeDescarte, FechaHoraModi)
     })
     
     mod_tabla <- TablaReactable(
       id = "tabla_descartados", data = data_tabla, columnas = NULL,
       col_specs = list(
-        Reactivar        = .coldef_accion("Reactivar", "rotate-left", "#198754"),
+        Acciones = .coldef_dropdown_acciones(ns, c(reactivar = "Reactivar")),
         CodContacto       = reactable::colDef(show = FALSE),
         PerRazSoc         = reactable::colDef(name = "Razón Social", minWidth = 180),
         PerCod            = reactable::colDef(name = "NIT", minWidth = 100),
         EtapaPreDescarte  = reactable::colDef(name = "Etapa de Origen", minWidth = 120),
         Motivo            = reactable::colDef(name = "Motivo", minWidth = 160),
         Origen            = reactable::colDef(name = "Canal", minWidth = 100),
+        DiasHastaDescarte = reactable::colDef(name = "Días hasta el Descarte", minWidth = 140, cell = function(v) round(v, 0)),
         DiasDesdeDescarte = reactable::colDef(name = "Días desde Descarte", minWidth = 130, cell = function(v) round(v, 0)),
         FechaHoraModi     = reactable::colDef(name = "Fecha de Descarte", minWidth = 140, format = reactable::colFormat(datetime = TRUE))
       ),
-      modo_seleccion = "celda", id_col = "CodContacto", cols_activos = "Reactivar",
+      modo_seleccion = "ninguno", id_col = "CodContacto",
       sortable = TRUE, searchable = TRUE, page_size = 20, compact = TRUE, mostrar_badge = FALSE, mostrar_nota = TRUE
     )
     
     reactivar_cod_rv <- reactiveVal(NULL)
     reactivar_mod <- FormularioReactivar(id = "mod_reactivar", usr = usr, cod_contacto = reactive(reactivar_cod_rv()))
     
-    observeEvent(mod_tabla$seleccion(), {
-      sel <- mod_tabla$seleccion()
-      req(sel, sel$col == "Reactivar")
-      reactivar_cod_rv(sel$fila$CodContacto[[1]])
+    observeEvent(input$accion_tabla, {
+      acc <- input$accion_tabla
+      req(acc$cod_contacto, acc$accion == "reactivar")
+      reactivar_cod_rv(acc$cod_contacto)
       showModal(modalDialog(title = "Reactivar Registro", size = "m", easyClose = TRUE, footer = modalButton("Cerrar"),
                             FormularioReactivarUI(ns("mod_reactivar"))))
     })

@@ -73,6 +73,51 @@ eliminar_alianza_prospecto <- function(id_alianza) {
   ReemplazarDatos(vacio, "CRMNALPROSPECTOALIANZA", llaves = list(IdAlianza = id_alianza))
 }
 
+# Analiza si las ventas de cada Cliente aliado aumentaron después de que se
+# le vincularon Prospectos — compara el promedio de kilos/día vendidos antes
+# y después de la primera alianza registrada. Usa el objeto `data` global de
+# facturación (mismos campos CLCliNit/FecFact que usa detectar_conversion_leads;
+# se asume además una columna Kilos — ajustar el nombre si tu `data` usa otro)
+analizar_impacto_alianzas <- function() {
+  alianzas <- listar_todas_las_alianzas()
+  if (nrow(alianzas) == 0) return(data.frame())
+  
+  clientes <- CargarDatos("CRMNALCONTACTO") %>% select(CodContacto, PerCod)
+  
+  resumen <- alianzas %>%
+    left_join(clientes, by = c("CodClienteAliado" = "CodContacto")) %>%
+    group_by(CodClienteAliado, ClienteAliado, PerCod) %>%
+    summarise(FechaPrimeraAlianza = min(FechaHoraCrea), NumProspectos = n_distinct(CodContacto), .groups = "drop") %>%
+    filter(!is.na(PerCod))
+  
+  if (nrow(resumen) == 0) return(data.frame())
+  
+  nit_num <- suppressWarnings(as.numeric(resumen$PerCod))
+  
+  resumen %>%
+    mutate(NitNum = nit_num) %>%
+    rowwise() %>%
+    mutate(
+      fecha_alianza = as.Date(FechaPrimeraAlianza),
+      ventas_antes_kilos  = sum(data$Kilos[data$CLCliNit == NitNum & data$FecFact < fecha_alianza], na.rm = TRUE),
+      ventas_despues_kilos = sum(data$Kilos[data$CLCliNit == NitNum & data$FecFact >= fecha_alianza], na.rm = TRUE),
+      primera_factura = suppressWarnings(min(data$FecFact[data$CLCliNit == NitNum], na.rm = TRUE)),
+      dias_antes  = as.numeric(difftime(fecha_alianza, primera_factura, units = "days")),
+      dias_despues = as.numeric(difftime(Sys.Date(), fecha_alianza, units = "days"))
+    ) %>%
+    ungroup() %>%
+    mutate(
+      dias_antes  = pmax(dias_antes, 1, na.rm = TRUE),
+      dias_despues = pmax(dias_despues, 1, na.rm = TRUE),
+      promedio_diario_antes  = round(ventas_antes_kilos / dias_antes, 2),
+      promedio_diario_despues = round(ventas_despues_kilos / dias_despues, 2),
+      VariacionPct = ifelse(promedio_diario_antes > 0,
+                            round((promedio_diario_despues - promedio_diario_antes) / promedio_diario_antes * 100, 1),
+                            NA_real_)
+    ) %>%
+    select(ClienteAliado, NumProspectos, FechaPrimeraAlianza, promedio_diario_antes, promedio_diario_despues, VariacionPct)
+}
+
 # Catálogo de Clientes disponibles para vincular como aliados — Etapa
 # derivada, no presencia directa en una tabla
 catalogo_clientes_aliados <- function() {
@@ -304,6 +349,12 @@ TablaProspectosUI <- function(id) {
       column(6, box(title = "Antigüedad en Prospecto", width = 12, collapsible = FALSE, plotly::plotlyOutput(ns("kpi_antiguedad"), height = "220px"))),
       column(6, box(title = "Prospectos por Alianza", width = 12, collapsible = FALSE, plotly::plotlyOutput(ns("kpi_alianzas"), height = "220px")))
     ),
+    fluidRow(
+      column(12, box(title = "Impacto de las Alianzas en las Ventas del Cliente Aliado", width = 12, collapsible = FALSE,
+                     FormatearTexto("Compara el promedio de kilos vendidos por día antes y después de vincularse el primer Prospecto a cada Cliente aliado.",
+                                    tamano_pct = 0.8, color = "#64748B"),
+                     reactable::reactableOutput(ns("tabla_impacto_alianzas"))))
+    ),
     br(),
     TablaReactableUI(ns("tabla_prospectos"), titulo = "Prospectos",
                      footer = "Un Prospecto se gestiona vía alianzas con Clientes existentes, no con venta directa.", footer_tipo = "info")
@@ -352,6 +403,33 @@ TablaProspectos <- function(id, usr) {
       .grafico_barras_horizontal(dat, "ClienteAliado", "n", color = "#C8862A", titulo_x = "Prospectos vinculados")
     })
     
+    output$tabla_impacto_alianzas <- reactable::renderReactable({
+      dat <- tryCatch(analizar_impacto_alianzas(), error = function(e) data.frame())
+      if (nrow(dat) == 0) return(reactable::reactable(data.frame(Mensaje = "Sin alianzas registradas aún")))
+      
+      dat <- dat %>%
+        mutate(Tendencia = ifelse(is.na(VariacionPct), "Sin ventas previas",
+                                  ifelse(VariacionPct > 0, "Aumentó", ifelse(VariacionPct < 0, "Disminuyó", "Sin cambio"))))
+      
+      reactable::reactable(
+        dat, sortable = TRUE, compact = TRUE, searchable = TRUE, defaultSorted = "VariacionPct",
+        columns = list(
+          ClienteAliado = reactable::colDef(name = "Cliente Aliado", minWidth = 180),
+          NumProspectos = reactable::colDef(name = "N° Prospectos", minWidth = 100),
+          FechaPrimeraAlianza = reactable::colDef(name = "Primera Alianza", minWidth = 130, format = reactable::colFormat(datetime = TRUE)),
+          promedio_diario_antes = reactable::colDef(name = "Kilos/día (antes)", minWidth = 130),
+          promedio_diario_despues = reactable::colDef(name = "Kilos/día (después)", minWidth = 140),
+          VariacionPct = reactable::colDef(name = "Variación %", minWidth = 110,
+                                           cell = function(v) if (is.na(v)) "N/A" else paste0(v, "%")),
+          Tendencia = reactable::colDef(name = "Tendencia", minWidth = 120,
+                                        cell = function(v) {
+                                          color <- switch(v, "Aumentó" = "#198754", "Disminuyó" = "#C11007", "#8e9aaf")
+                                          htmltools::tags$span(style = paste0("color:", color, "; font-weight:600;"), v)
+                                        })
+        )
+      )
+    })
+    
     data_tabla <- reactive({
       prospectos_filtrados() %>%
         rowwise() %>%
@@ -366,7 +444,8 @@ TablaProspectos <- function(id, usr) {
       id = "tabla_prospectos", data = data_tabla, columnas = NULL,
       col_specs = list(
         Acciones = .coldef_dropdown_acciones(ns, c(editar = "Editar", comentar = "Comentar",
-                                                   reclasificar = "Reclasificar a Lead", descartar = "Descartar")),
+                                                   reclasificar = "Reclasificar a Lead", oportunidad = "Crear Oportunidad",
+                                                   descartar = "Descartar")),
         CodContacto = reactable::colDef(show = FALSE),
         PerRazSoc   = reactable::colDef(name = "Razón Social", minWidth = 180),
         PerCod      = reactable::colDef(name = "NIT", minWidth = 100),
@@ -390,6 +469,12 @@ TablaProspectos <- function(id, usr) {
     descartar_cod_rv <- reactiveVal(NULL)
     descartar_mod <- FormularioDescartarProspecto(id = "mod_descartar", usr = usr, cod_contacto = reactive(descartar_cod_rv()))
     
+    dd_oportunidad <- reactiveVal(NULL)
+    oportunidad_trigger <- reactiveVal(0)
+    FormularioOportunidad("mod_oportunidad", dd_data = reactive(dd_oportunidad()),
+                          dat = reactive(data), usr = usr, trigger_update = oportunidad_trigger,
+                          tipo_cliente_default = reactive("PROSPECTO"))
+    
     observeEvent(input$accion_tabla, {
       acc <- input$accion_tabla
       req(acc$cod_contacto, acc$accion)
@@ -411,8 +496,17 @@ TablaProspectos <- function(id, usr) {
         descartar_cod_rv(cod)
         showModal(modalDialog(title = "Descartar Prospecto", size = "m", easyClose = TRUE, footer = modalButton("Cerrar"),
                               FormularioDescartarProspectoUI(ns("mod_descartar"))))
+      } else if (acc$accion == "oportunidad") {
+        fila <- data_tabla() %>% filter(CodContacto == cod)
+        req(nrow(fila) > 0)
+        dd_oportunidad(list(fila_completa = list(PerRazSoc = fila$PerRazSoc[[1]])))
+        showModal(modalDialog(title = paste0("Nueva Oportunidad — ", fila$PerRazSoc[[1]]), size = "l",
+                              easyClose = TRUE, footer = modalButton("Cerrar"),
+                              FormularioOportunidadUI(ns("mod_oportunidad"))))
       }
     })
+    
+    observeEvent(oportunidad_trigger(), { removeModal() }, ignoreInit = TRUE)
     
     observeEvent(reclasificar_mod$n(), { removeModal(); refresh_trigger(isolate(refresh_trigger()) + 1) })
     observeEvent(descartar_mod$n(), { removeModal(); refresh_trigger(isolate(refresh_trigger()) + 1) })
